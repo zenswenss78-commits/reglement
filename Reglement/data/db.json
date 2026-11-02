@@ -1,0 +1,30 @@
+{
+  "settings": {
+    "siteName": "BLACKLIFE RP",
+    "tagline": "Règlement officiel du serveur",
+    "logo": "/uploads/1793589105905-z7JkQFa-LWKs.png",
+    "colors": {
+      "accent": "#e11d48",
+      "background": "#0b0b10",
+      "surface": "#15151d",
+      "text": "#ececf1"
+    }
+  },
+  "access": [
+    {
+      "id": "1184931048451211346",
+      "username": "NO NAME",
+      "avatar": "4e2fb61a75fe9a39cbb1ff0c5734c423",
+      "note": "Fondation",
+      "perms": {
+        "edit": true,
+        "publish": true,
+        "appearance": true
+      },
+      "addedAt": 1793589088336
+    }
+  ],
+  "requests": [],
+  "categories": [],
+  "articles": []
+}
