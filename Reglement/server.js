@@ -25,12 +25,13 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const fileConfig = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) : {};
 const discordFile = fileConfig.discord || {};
 const PORT = Number(process.env.PORT || fileConfig.port) || 3000;
+// .trim() : un espace ou retour à la ligne collé par erreur casse l'OAuth Discord.
 const config = {
-  clientId: process.env.DISCORD_CLIENT_ID || discordFile.clientId || '',
-  clientSecret: process.env.DISCORD_CLIENT_SECRET || discordFile.clientSecret || '',
-  redirectUri: process.env.DISCORD_REDIRECT_URI || discordFile.redirectUri || `http://localhost:${PORT}/auth/callback`,
-  botToken: process.env.DISCORD_BOT_TOKEN || discordFile.botToken || '',
-  ownerId: String(process.env.OWNER_DISCORD_ID || fileConfig.ownerId || ''),
+  clientId: String(process.env.DISCORD_CLIENT_ID || discordFile.clientId || '').trim(),
+  clientSecret: String(process.env.DISCORD_CLIENT_SECRET || discordFile.clientSecret || '').trim(),
+  redirectUri: String(process.env.DISCORD_REDIRECT_URI || discordFile.redirectUri || `http://localhost:${PORT}/auth/callback`).trim(),
+  botToken: String(process.env.DISCORD_BOT_TOKEN || discordFile.botToken || '').trim(),
+  ownerId: String(process.env.OWNER_DISCORD_ID || fileConfig.ownerId || '').trim(),
 };
 const discordReady = !!(config.clientId && config.clientSecret && config.ownerId);
 if (!discordReady) console.warn('⚠ Connexion Discord non configurée : remplissez config.json (voir README.md).');
