@@ -23,6 +23,8 @@ const editing = () => can('edit') && !state.civilView;
 const avatarUrl = u => u.avatar
   ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=64`
   : `https://cdn.discordapp.com/embed/avatars/${Number((BigInt(u.id) >> 22n) % 6n)}.png`;
+const fmtDate = t => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+const plural = (n, word) => `${n} ${word}${n > 1 ? 's' : ''}`;
 const PERM_LABELS = {
   edit: ['Modifier le règlement', 'Créer, modifier, organiser et supprimer catégories et articles'],
   publish: ['Publier', 'Publier ou dépublier catégories et articles'],
@@ -40,6 +42,9 @@ const ICON = {
   plus: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8Z"/><path d="M14 3v5h5M12 11v6M9 14h6"/></svg>',
   folder: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M12 11v5M9.5 13.5h5"/></svg>',
+  link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
+  left: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+  right: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
 };
 
 // ---------------------------------------------------------------------------
@@ -252,7 +257,7 @@ function renderShell() {
       <img class="mini-avatar" src="${avatarUrl(me())}" alt=""><span>Connecté : <strong>${esc(me().username)}</strong></span>
       ${me().owner ? '<span class="role-pill">PROPRIÉTAIRE</span>' : ''}
       <span class="spacer"></span>
-      <label class="toggle" title="Afficher le site exactement comme un visiteur (contenu publié uniquement)"><input type="checkbox" id="civil-toggle" ${state.civilView ? 'checked' : ''}> Vue civile</label>
+      <label class="toggle" title="Afficher le site exactement comme un joueur (contenu publié uniquement, sans brouillons)"><input type="checkbox" id="civil-toggle" ${state.civilView ? 'checked' : ''}> Voir comme un joueur</label>
       <button class="linkish" id="logout">Déconnexion</button>
     </div></div>` : ''}`;
   $('#footer').innerHTML = `<div class="footer-inner">
@@ -340,26 +345,58 @@ function renderHome() {
   const v = visible();
   const nums = numbering(v);
   const tops = childCats(v, null);
+  const lastUpdate = v.articles.reduce((m, a) => Math.max(m, a.updatedAt || 0), 0);
+  const recent = v.articles.filter(a => a.updatedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
   document.title = `${s.siteName} — Règlement`;
   app.innerHTML = `
     <section class="hero">
       ${logoHtml(s, 'hero-logo')}
       <h1>${esc(s.siteName)}</h1>
       ${s.tagline ? `<p>${esc(s.tagline)}</p>` : ''}
-      <label class="hero-search">${ICON.search}<input type="search" id="hero-search" placeholder="Rechercher une règle, un mot-clé…" aria-label="Rechercher dans le règlement"></label>
-      ${tops.length ? `<a class="btn btn-primary btn-lg" href="#/c/${tops[0].id}">Consulter le règlement</a>` : ''}
+      <label class="hero-search">${ICON.search}<input type="search" id="hero-search" placeholder="Rechercher une règle, un mot-clé… (ex. freekill)" aria-label="Rechercher dans le règlement"></label>
+      ${tops.length ? `<a class="btn btn-primary btn-lg" href="#/c/${tops[0].id}">Lire le règlement</a>` : ''}
+      ${v.articles.length ? `<div class="hero-stats">
+        <span><strong>${tops.length}</strong> catégorie${tops.length > 1 ? 's' : ''}</span>
+        <span><strong>${v.articles.length}</strong> article${v.articles.length > 1 ? 's' : ''}</span>
+        ${lastUpdate ? `<span>Mis à jour le <strong>${fmtDate(lastUpdate)}</strong></span>` : ''}
+      </div>` : ''}
     </section>
-    ${tops.length ? `<h2 class="section-title">Catégories du règlement</h2>
+
+    ${tops.length ? `<h2 class="section-title">Comment lire ce règlement</h2>
+    <div class="guide-grid">
+      <div class="guide-card"><span class="guide-ico">📖</span><h3>Les numéros</h3>
+        <p>Chaque règle a un numéro. <strong>Article 2.1.3</strong> = catégorie 2, section 1, article 3. Citez ce numéro quand vous parlez d'une règle au staff.</p></div>
+      <div class="guide-card"><span class="guide-ico">🔎</span><h3>Trouver une règle</h3>
+        <p>Tapez un mot dans la barre de recherche (<em>freekill</em>, <em>braquage</em>…) : les règles concernées s'affichent tout de suite.</p></div>
+      <div class="guide-card"><span class="guide-ico">🎨</span><h3>Les encadrés</h3>
+        <p><span class="chip chip-info">ℹ Information</span> conseil ou précision<br>
+        <span class="chip chip-warn">⚠ Important</span> point à ne pas rater<br>
+        <span class="chip chip-danger">⛔ Sanction</span> punition prévue</p></div>
+      <div class="guide-card"><span class="guide-ico">🔗</span><h3>Partager</h3>
+        <p>Sous chaque article, le bouton <strong>« Copier le lien »</strong> donne un lien direct à coller sur Discord.</p></div>
+    </div>
+    <p class="accept-note">En jouant sur ${esc(s.siteName)}, vous vous engagez à connaître et respecter ce règlement. Le non-respect peut entraîner des sanctions.</p>
+
+    <h2 class="section-title">Catégories du règlement</h2>
       <div class="cat-grid">${tops.map(c => {
         const subs = childCats(v, c.id);
         const n = countArticlesDeep(v, c.id);
+        const arts = catArticles(v, c.id);
         return `<a class="cat-card" href="#/c/${c.id}">
-          <span class="num">${nums.cat.get(c.id)}.</span> ${c.published ? '' : '<span class="badge badge-draft">Brouillon</span>'}
+          <div class="cat-card-top"><span class="cat-num">${nums.cat.get(c.id)}</span>${c.published ? '' : '<span class="badge badge-draft">Brouillon</span>'}</div>
           <h3>${esc(c.title)}</h3>
           ${c.description ? `<p>${esc(c.description)}</p>` : ''}
-          <div class="meta">${n} article${n > 1 ? 's' : ''}${subs.length ? ` · ${subs.length} sous-catégorie${subs.length > 1 ? 's' : ''}` : ''}</div>
+          ${arts.length ? `<ul class="cat-preview">${arts.slice(0, 3).map(a => `<li><span>${nums.art.get(a.id)}</span>${esc(a.title)}</li>`).join('')}
+            ${arts.length > 3 ? `<li class="more">et ${arts.length - 3} autre${arts.length - 3 > 1 ? 's' : ''}…</li>` : ''}</ul>` : ''}
+          <div class="meta">${plural(n, 'article')}${subs.length ? ` · ${plural(subs.length, 'sous-catégorie')}` : ''}<span class="go">Lire ${ICON.right}</span></div>
         </a>`;
-      }).join('')}</div>`
+      }).join('')}</div>
+
+    ${recent.length ? `<h2 class="section-title">Dernières modifications</h2>
+      <div class="recent">${recent.map(a => `<a href="#/c/${a.categoryId}/${a.id}">
+        <span class="recent-num">Art. ${nums.art.get(a.id)}</span>
+        <span class="recent-title">${esc(a.title)}</span>
+        <span class="recent-date">${fmtDate(a.updatedAt)}</span></a>`).join('')}</div>` : ''}`
       : `<div class="empty">${editing() ? 'Aucune catégorie pour le moment. <a href="#/admin">Créer la première catégorie</a>.' : "Le règlement n'est pas encore publié."}</div>`}`;
   $('#hero-search').addEventListener('input', e => goSearch(e.target.value));
 }
@@ -394,9 +431,12 @@ function articleHtml(a, num, preview = false) {
       <h3>${esc(a.title)}</h3>
       ${a.published || preview ? '' : '<span class="badge badge-draft">Brouillon</span>'}
       ${!preview && editing() ? `<span class="tools"><a class="btn btn-sm" href="#/admin/article/${a.id}">${ICON.edit} Modifier</a></span>` : ''}
-      ${!preview ? `<a class="rule-anchor" href="#/c/${a.categoryId}/${a.id}" title="Lien direct vers cet article">#</a>` : ''}
     </header>
     <div class="prose">${sanitize(a.content)}</div>
+    ${preview ? '' : `<footer class="rule-foot">
+      ${a.updatedAt ? `<span>Mis à jour le ${fmtDate(a.updatedAt)}</span>` : '<span></span>'}
+      <button type="button" class="linkish" data-copy="#/c/${a.categoryId}/${a.id}">${ICON.link} Copier le lien</button>
+    </footer>`}
   </article>`;
 }
 
@@ -423,22 +463,49 @@ function renderCategory(id, articleId) {
   if (!c) return renderNotFound();
   const nums = numbering(v);
   const path = ancestors(v, id);
+  // Tous les articles affichés sur la page (catégorie + sous-sections), dans l'ordre de lecture.
+  const pageArticles = [];
+  const collect = cid => { pageArticles.push(...catArticles(v, cid)); childCats(v, cid).forEach(sc => collect(sc.id)); };
+  collect(c.id);
+  // Catégorie précédente / suivante dans l'ordre du sommaire.
+  const flat = [];
+  const walk = parentId => childCats(v, parentId).forEach(x => { flat.push(x); walk(x.id); });
+  walk(null);
+  const i = flat.findIndex(x => x.id === id);
+  const prev = flat[i - 1], next = flat[i + 1];
   document.title = `${c.title} — ${state.data.settings.siteName}`;
   app.innerHTML = `<div class="reader">
     ${sidebarHtml(v, nums, id)}
     <div>
       <nav class="crumbs"><a href="#/">Accueil</a>${path.map(p => ` › <a href="#/c/${p.id}">${esc(p.title)}</a>`).join('')}</nav>
       ${editing() ? `<p style="margin:-6px 0 18px"><a class="btn btn-sm" href="#/admin/article/new?cat=${c.id}">${ICON.plus} Ajouter un article ici</a></p>` : ''}
+      ${pageArticles.length > 1 ? `<nav class="page-toc"><span class="page-toc-title">Dans cette page · ${plural(pageArticles.length, 'article')}</span>
+        <div>${pageArticles.map(a => `<a href="#" data-jump="${a.id}"><span>${nums.art.get(a.id)}</span>${esc(a.title)}</a>`).join('')}</div></nav>` : ''}
       ${sectionHtml(v, nums, c, 0)}
+      <nav class="pager">
+        ${prev ? `<a class="pager-link" href="#/c/${prev.id}">${ICON.left}<span><small>Précédent</small>${nums.cat.get(prev.id)}. ${esc(prev.title)}</span></a>` : '<span></span>'}
+        ${next ? `<a class="pager-link next" href="#/c/${next.id}"><span><small>Suivant</small>${nums.cat.get(next.id)}. ${esc(next.title)}</span>${ICON.right}</a>` : '<span></span>'}
+      </nav>
     </div></div>`;
-  if (articleId) {
-    const el = document.getElementById(`art-${articleId}`);
-    if (el) requestAnimationFrame(() => {
-      el.scrollIntoView({ block: 'start' });
-      el.classList.add('flash');
-      setTimeout(() => el.classList.remove('flash'), 1800);
-    });
-  }
+
+  const jumpTo = artId => {
+    const el = document.getElementById(`art-${artId}`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1800);
+  };
+  if (articleId) requestAnimationFrame(() => jumpTo(articleId));
+
+  app.onclick = e => {
+    const jump = e.target.closest('[data-jump]');
+    if (jump) { e.preventDefault(); return jumpTo(jump.dataset.jump); }
+    const copy = e.target.closest('[data-copy]');
+    if (copy) {
+      const url = `${location.origin}/${copy.dataset.copy}`;
+      navigator.clipboard.writeText(url).then(() => toast('Lien copié : collez-le sur Discord.'), () => toast(url));
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +616,12 @@ function renderLogin(params) {
     ${err && messages[err] ? `<div class="auth-alert">${messages[err]}</div>` : ''}
     ${state.data.discordReady
       ? `<a class="btn btn-discord btn-lg" href="/auth/discord" style="width:100%">${DISCORD_LOGO} Se connecter avec Discord</a>`
-      : '<p class="error-msg">Connexion Discord non configurée : remplissez <code>config.json</code> puis redémarrez le serveur.</p>'}
+      : '<p class="error-msg">Connexion Discord non configurée sur le serveur (variables DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET et OWNER_DISCORD_ID).</p>'}
+    <ol class="auth-steps">
+      <li>Cliquez sur <strong>« Se connecter avec Discord »</strong> et acceptez.</li>
+      <li>Si vous êtes autorisé, vous arrivez directement dans l'administration.</li>
+      <li>Sinon, votre demande est envoyée au propriétaire : il pourra vous donner l'accès.</li>
+    </ol>
   </div>`;
   const copy = $('.copy-id');
   if (copy) copy.onclick = () => navigator.clipboard.writeText(id).then(() => toast('ID copié.'));
@@ -589,10 +661,10 @@ function renderAdminTree() {
         <div class="actions">
           ${canEdit ? `<button class="icon-btn" data-act="cat-move" data-dir="-1" data-id="${c.id}" title="Monter" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
           <button class="icon-btn" data-act="cat-move" data-dir="1" data-id="${c.id}" title="Descendre" ${i === siblings.length - 1 ? 'disabled' : ''}>${ICON.down}</button>` : ''}
-          ${canPublish ? `<button class="icon-btn" data-act="cat-toggle" data-id="${c.id}" title="${c.published ? 'Dépublier' : 'Publier'}">${c.published ? ICON.eyeOff : ICON.eye}</button>` : ''}
+          ${canEdit ? `<button class="btn btn-sm" data-act="art-new" data-id="${c.id}" title="Ajouter un article dans cette catégorie">${ICON.plus} Article</button>
+          <button class="btn btn-sm" data-act="cat-new" data-id="${c.id}" title="Ajouter une sous-catégorie">${ICON.plus} Sous-catégorie</button>` : ''}
+          ${canPublish ? `<button class="btn btn-sm ${c.published ? '' : 'btn-primary'}" data-act="cat-toggle" data-id="${c.id}" title="${c.published ? 'Cacher aux joueurs' : 'Rendre visible pour les joueurs'}">${c.published ? `${ICON.eyeOff} Dépublier` : `${ICON.eye} Publier`}</button>` : ''}
           ${canEdit ? `<button class="icon-btn" data-act="cat-edit" data-id="${c.id}" title="Modifier titre, description, emplacement">${ICON.edit}</button>
-          <button class="icon-btn" data-act="art-new" data-id="${c.id}" title="Ajouter un article">${ICON.file}</button>
-          <button class="icon-btn" data-act="cat-new" data-id="${c.id}" title="Ajouter une sous-catégorie">${ICON.folder}</button>
           <button class="icon-btn danger" data-act="cat-delete" data-id="${c.id}" title="Supprimer">${ICON.trash}</button>` : ''}
         </div>
       </div>
@@ -603,8 +675,8 @@ function renderAdminTree() {
           <div class="actions">
             ${canEdit ? `<button class="icon-btn" data-act="art-move" data-dir="-1" data-id="${a.id}" title="Monter" ${j === 0 ? 'disabled' : ''}>${ICON.up}</button>
             <button class="icon-btn" data-act="art-move" data-dir="1" data-id="${a.id}" title="Descendre" ${j === arts.length - 1 ? 'disabled' : ''}>${ICON.down}</button>` : ''}
-            ${canPublish ? `<button class="icon-btn" data-act="art-toggle" data-id="${a.id}" title="${a.published ? 'Dépublier' : 'Publier'}">${a.published ? ICON.eyeOff : ICON.eye}</button>` : ''}
-            ${canEdit ? `<a class="icon-btn" href="#/admin/article/${a.id}" title="Modifier">${ICON.edit}</a>
+            ${canPublish ? `<button class="btn btn-sm ${a.published ? '' : 'btn-primary'}" data-act="art-toggle" data-id="${a.id}" title="${a.published ? 'Cacher aux joueurs' : 'Rendre visible pour les joueurs'}">${a.published ? 'Dépublier' : 'Publier'}</button>` : ''}
+            ${canEdit ? `<a class="btn btn-sm" href="#/admin/article/${a.id}" title="Ouvrir l'éditeur">${ICON.edit} Modifier</a>
             <button class="icon-btn danger" data-act="art-delete" data-id="${a.id}" title="Supprimer">${ICON.trash}</button>` : ''}
           </div></div></li>`).join('')
         : '<li class="adm-empty">Aucun article.</li>'}</ul>
@@ -613,9 +685,31 @@ function renderAdminTree() {
   };
 
   const tops = childCats(v, null);
+  const drafts = v.categories.filter(c => !c.published).length + v.articles.filter(a => !a.published).length;
   app.innerHTML = `${adminHeader('tree', canEdit ? `<button class="btn btn-primary" data-act="cat-new">${ICON.plus} Nouvelle catégorie</button>` : '')}
-    <p class="hint" style="margin-top:-8px">Les nouveaux éléments sont créés en <strong>brouillon</strong> : invisibles pour les visiteurs tant qu'ils ne sont pas publiés. Utilisez « Vue civile » en haut pour prévisualiser le site public.</p>
-    ${tops.length ? `<ul class="adm-tree">${tops.map(catHtml).join('')}</ul>` : '<div class="empty">Aucune catégorie. Commencez par en créer une.</div>'}`;
+    <div class="adm-stats">
+      <div><strong>${v.categories.length}</strong><span>catégorie${v.categories.length > 1 ? 's' : ''}</span></div>
+      <div><strong>${v.articles.length}</strong><span>article${v.articles.length > 1 ? 's' : ''}</span></div>
+      <div class="${drafts ? 'is-warn' : ''}"><strong>${drafts}</strong><span>brouillon${drafts > 1 ? 's' : ''} (invisible${drafts > 1 ? 's' : ''} pour les joueurs)</span></div>
+    </div>
+    <details class="help-box" ${tops.length ? '' : 'open'}>
+      <summary>❓ Comment modifier le règlement ? (guide rapide)</summary>
+      <ol class="help-steps">
+        ${canEdit ? `<li><strong>Créez une catégorie</strong> avec le bouton « Nouvelle catégorie » (ex. « Règles générales », « Roleplay »).</li>
+        <li><strong>Ajoutez des articles</strong> avec le bouton « + Article » de la catégorie. Un article = une règle.</li>` : ''}
+        ${canPublish ? `<li><strong>Publiez</strong> : tout ce qui est en <span class="badge badge-draft">Brouillon</span> est invisible pour les joueurs. Cliquez sur « Publier » quand c'est prêt.</li>`
+          : '<li>Vous ne pouvez pas publier : une personne ayant l\'accès « Publier » rendra vos articles visibles.</li>'}
+        <li><strong>Vérifiez</strong> en cochant « Voir comme un joueur » dans la barre en haut : vous voyez le site exactement comme eux.</li>
+      </ol>
+      <div class="help-legend">
+        <span><span class="badge badge-live">Publié</span> visible par tous</span>
+        <span><span class="badge badge-draft">Brouillon</span> visible uniquement par le staff</span>
+        <span><span class="badge badge-hidden">Masqué</span> publié, mais sa catégorie est en brouillon</span>
+        ${canEdit ? `<span>${ICON.up}${ICON.down} changer l'ordre (les numéros se mettent à jour tout seuls)</span>
+        <span>${ICON.edit} modifier · ${ICON.trash} supprimer</span>` : ''}
+      </div>
+    </details>
+    ${tops.length ? `<ul class="adm-tree">${tops.map(catHtml).join('')}</ul>` : '<div class="empty">Aucune catégorie. Commencez par en créer une avec le bouton « Nouvelle catégorie ».</div>'}`;
 
   app.onclick = async e => {
     const b = e.target.closest('[data-act]');
@@ -715,7 +809,7 @@ function categoryModal(cat, parentId = null) {
 
 const TOOLBAR = [
   ['bold', '<b>G</b>', 'Gras (Ctrl+B)'], ['italic', '<i>I</i>', 'Italique (Ctrl+I)'], ['underline', '<u>S</u>', 'Souligné (Ctrl+U)'], ['strikeThrough', '<s>B</s>', 'Barré'],
-  '|', ['h2', 'T1', 'Titre'], ['h3', 'T2', 'Sous-titre'], ['p', '¶', 'Paragraphe normal'],
+  '|', ['h2', 'Titre', 'Gros titre'], ['h3', 'Sous-titre', 'Petit titre'], ['p', 'Texte', 'Paragraphe normal'],
   '|', ['insertUnorderedList', '• Liste', 'Liste à puces'], ['insertOrderedList', '1. Liste', 'Liste numérotée'], ['blockquote', '❝', 'Citation'],
   '|', ['callout-info', 'ℹ Info', 'Encadré information'], ['callout-warn', '⚠ Important', 'Encadré important'], ['callout-danger', '⛔ Sanction', 'Encadré sanction'],
   '|', ['link', '🔗', 'Insérer un lien'], ['image', '🖼 Image', 'Insérer une image'], ['insertHorizontalRule', '―', 'Séparateur'],
@@ -762,6 +856,18 @@ function renderEditor(id, catParam) {
           <h4>Emplacement</h4>
           <label class="field" style="margin:0"><span>Catégorie</span><select id="ed-cat">${categoryOptions(draft.categoryId, null, { allowRoot: false })}</select></label>
         </div>
+        <details class="side-card help-card" open>
+          <summary><h4>Aide à la rédaction</h4></summary>
+          <ul>
+            <li><strong>Une règle = un article</strong>, avec un titre court et clair (ex. « Freekill »).</li>
+            <li>Mettez les mots importants en <b>gras</b> (sélectionnez le texte puis <b>G</b>).</li>
+            <li><b>⛔ Sanction</b> : indiquez la punition prévue (ex. « avertissement puis ban 24 h »).</li>
+            <li><b>⚠ Important</b> : un point à ne pas rater. <b>ℹ Info</b> : un conseil ou un exemple.</li>
+            <li>Image : bouton 🖼, ou glissez / collez une image directement dans le texte.</li>
+            <li><b>Ctrl + S</b> enregistre. « Prévisualiser » montre le rendu pour les joueurs.</li>
+            <li>Les numéros (Article 2.1.3) sont calculés automatiquement.</li>
+          </ul>
+        </details>
         ${isNew ? '' : `<div class="side-card"><h4>Zone de danger</h4><button class="btn btn-danger" id="ed-delete">${ICON.trash} Supprimer l'article</button></div>`}
       </aside>
     </div>`;
@@ -789,7 +895,7 @@ function renderEditor(id, catParam) {
     const hidden = (cid) => { const c = cats.find(x => x.id === cid); return !c || !c.published || (c.parentId && hidden(c.parentId)); };
     const warn = $('#ed-warn');
     warn.hidden = !hidden(catSel.value);
-    warn.textContent = 'La catégorie (ou une catégorie parente) est en brouillon : cet article restera invisible pour les civils tant qu\'elle n\'est pas publiée.';
+    warn.textContent = 'La catégorie (ou une catégorie parente) est en brouillon : cet article restera invisible pour les joueurs tant qu\'elle n\'est pas publiée.';
   }
   refreshStatus();
 
@@ -831,7 +937,7 @@ function renderEditor(id, catParam) {
     const pos = (idx >= 0 ? idx : list.length) + 1;
     const fake = { ...draft, title: title.value.trim() || 'Sans titre', content: body.innerHTML, categoryId: catSel.value, published: true };
     const crumb = ancestors(v, catSel.value).map(c => esc(c.title)).join(' › ');
-    $('#preview-pane').innerHTML = `<div class="preview-banner">${ICON.eye}<span><strong>Aperçu</strong> — voici comment les civils verront cet article une fois publié.</span></div>
+    $('#preview-pane').innerHTML = `<div class="preview-banner">${ICON.eye}<span><strong>Aperçu</strong> — voici comment les joueurs verront cet article une fois publié.</span></div>
       <nav class="crumbs">Accueil › ${crumb}</nav>${articleHtml(fake, `${nums.cat.get(catSel.value)}.${pos}`, true)}`;
   };
 
@@ -1077,6 +1183,12 @@ async function renderAccess() {
 // ---------------------------------------------------------------------------
 // Démarrage
 // ---------------------------------------------------------------------------
+
+// Bouton « remonter en haut », affiché après un peu de défilement.
+const toTop = Object.assign(document.createElement('button'), { className: 'to-top', title: 'Remonter en haut', innerHTML: ICON.up });
+toTop.onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+document.body.append(toTop);
+window.addEventListener('scroll', () => toTop.classList.toggle('show', window.scrollY > 600), { passive: true });
 
 (async () => {
   try {
