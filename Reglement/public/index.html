@@ -12,8 +12,12 @@
 </head>
 <body>
   <header class="topbar" id="topbar"></header>
-  <main id="app" class="app"><div class="loading">Chargement du règlement…</div></main>
-  <footer class="footer" id="footer"></footer>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Navigation du règlement"></aside>
+    <main class="main" id="main"><div class="loading">Chargement du règlement…</div></main>
+    <aside class="toc" id="toc" aria-label="Sur cette page"></aside>
+  </div>
+  <div class="scrim" id="scrim"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <script src="/app.js"></script>
 </body>

@@ -1,50 +1,65 @@
-// BLACKLIFE RP — interface du règlement (lecture publique + administration via Discord)
+// RedSide V5 — interface du règlement : lecture façon documentation + mode édition par blocs
 'use strict';
 
-const state = {
-  data: null,        // réponse de /api/data
-  civilView: false,  // une personne connectée peut voir le site comme un visiteur
-  dirty: false,      // modifications non enregistrées dans l'éditeur
-  lastHash: location.hash,
+// ---------------------------------------------------------------------------
+// État & utilitaires
+// ---------------------------------------------------------------------------
+
+// localStorage peut être indisponible (navigation privée…) : on ne s'en sert que pour du confort.
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignoré */ } },
 };
+
+const state = {
+  data: null,                                // réponse de /api/data
+  editing: store.get('rs_editing', false),   // mode édition (accès « Modifier »)
+  dirty: false,                              // modifications non enregistrées dans l'éditeur
+  lastHash: location.hash,
+  open: new Set(store.get('rs_open', [])),   // pages dépliées dans la sidebar
+  heads: [],                                 // titres H2/H3 de la page affichée
+  focusTitle: false,                         // nouvelle page : on sélectionne le titre
+};
+let editor = null; // éditeur actif (null hors du mode édition)
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const app = $('#app');
+const main = $('#main'), sidebar = $('#sidebar'), toc = $('#toc'), topbar = $('#topbar');
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const textOf = html => new DOMParser().parseFromString(html || '', 'text/html').body.textContent.replace(/\s+/g, ' ').trim();
+const fmtDate = t => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+const fmtTime = t => new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+const byOrder = (a, b) => a.order - b.order;
+
 const me = () => state.data && state.data.user;
 const loggedIn = () => !!me();
 const can = perm => loggedIn() && (me().owner || !!me().perms[perm]);
-const editing = () => can('edit') && !state.civilView;
 
-// Avatar Discord (ou avatar par défaut si la personne n'en a pas).
 const avatarUrl = u => u.avatar
   ? `https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png?size=64`
   : `https://cdn.discordapp.com/embed/avatars/${Number((BigInt(u.id) >> 22n) % 6n)}.png`;
-const fmtDate = t => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-const plural = (n, word) => `${n} ${word}${n > 1 ? 's' : ''}`;
-const PERM_LABELS = {
-  edit: ['Modifier le règlement', 'Créer, modifier, organiser et supprimer catégories et articles'],
-  publish: ['Publier', 'Publier ou dépublier catégories et articles'],
-  appearance: ['Apparence', 'Couleurs, logo, nom du serveur'],
-};
 
+const svg = (d, size = 16, w = 2.2) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const ICON = {
-  search: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
-  up: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>',
-  down: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
-  edit: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
-  trash: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>',
-  eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
-  eyeOff: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-2.2 3.2M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.9 0 3.6-.6 5-1.5M2 2l20 20"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
-  plus: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
-  file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8Z"/><path d="M14 3v5h5M12 11v6M9 14h6"/></svg>',
-  folder: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/><path d="M12 11v5M9.5 13.5h5"/></svg>',
-  link: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>',
-  left: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
-  right: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+  chev: svg('<path d="m6 9 6 6 6-6"/>', 14, 2.4),
+  chevR: svg('<path d="m9 6 6 6-6 6"/>', 14, 2.4),
+  left: svg('<path d="m15 18-6-6 6-6"/>', 18),
+  right: svg('<path d="m9 18 6-6-6-6"/>', 18),
+  menu: svg('<path d="M4 6h16M4 12h16M4 18h16"/>', 20),
+  plus: svg('<path d="M12 5v14M5 12h14"/>', 14, 2.4),
+  edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>', 14),
+  trash: svg('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>', 14),
+  eye: svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>', 14),
+  copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>', 14),
+  clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', 14),
+  folder: svg('<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/>', 14),
+  bolt: svg('<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>', 14),
+  up: svg('<path d="m18 15-6-6-6 6"/>', 14, 2.4),
+  down: svg('<path d="m6 9 6 6 6-6"/>', 14, 2.4),
+  dots: svg('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>', 16, 3),
 };
 
 // ---------------------------------------------------------------------------
@@ -63,8 +78,8 @@ async function api(method, url, body, headers = {}) {
 
 async function loadData() {
   state.data = await api('GET', '/api/data');
-  if (!loggedIn()) state.civilView = false;
-  applyTheme();
+  if (state.editing && !can('edit')) setEditing(false);
+  applyBrand();
 }
 
 function uploadImage(file) {
@@ -80,48 +95,39 @@ function pickImage() {
   });
 }
 
+function setEditing(on) {
+  state.editing = on;
+  store.set('rs_editing', on);
+}
+
 // ---------------------------------------------------------------------------
-// Données & numérotation
+// Modèle : ce que voit l'utilisateur courant
 // ---------------------------------------------------------------------------
+// En lecture : la version publiée, comme un joueur. En mode édition : les brouillons.
 
-// Ce que voit l'utilisateur courant (en « vue civile », uniquement le publié).
-function visible() {
-  const { categories, articles } = state.data;
-  if (!state.civilView) return { categories, articles };
-  const byId = new Map(categories.map(c => [c.id, c]));
-  const ok = c => c && c.published && (!c.parentId || ok(byId.get(c.parentId)));
-  const cats = categories.filter(ok);
-  const ids = new Set(cats.map(c => c.id));
-  return { categories: cats, articles: articles.filter(a => a.published && ids.has(a.categoryId)) };
-}
+const pageStatus = raw => !raw.live ? 'draft' : JSON.stringify(raw.live) !== JSON.stringify(raw.draft) ? 'changed' : 'live';
+const STATUS = { draft: 'Brouillon — jamais publié', changed: 'Modifications non publiées', live: 'Publié' };
 
-const byOrder = (a, b) => a.order - b.order;
-const childCats = (v, parentId) => v.categories.filter(c => (c.parentId || null) === parentId).sort(byOrder);
-const catArticles = (v, catId) => v.articles.filter(a => a.categoryId === catId).sort(byOrder);
-const findCat = (v, id) => v.categories.find(c => c.id === id);
-
-// Numéros hiérarchiques : catégories « 2.1 », articles « 2.1.3 ».
-function numbering(v) {
-  const cat = new Map(), art = new Map();
-  const walk = (parentId, prefix) => childCats(v, parentId).forEach((c, i) => {
-    const n = prefix ? `${prefix}.${i + 1}` : String(i + 1);
-    cat.set(c.id, n);
-    catArticles(v, c.id).forEach((a, j) => art.set(a.id, `${n}.${j + 1}`));
-    walk(c.id, n);
-  });
-  walk(null, '');
-  return { cat, art };
-}
-
-function ancestors(v, catId) {
-  const out = [];
-  let c = findCat(v, catId);
-  while (c) { out.unshift(c); c = c.parentId ? findCat(v, c.parentId) : null; }
-  return out;
-}
-
-function countArticlesDeep(v, catId) {
-  return catArticles(v, catId).length + childCats(v, catId).reduce((n, c) => n + countArticlesDeep(v, c.id), 0);
+function model() {
+  const all = state.data.pages;
+  const rawById = new Map(all.map(p => [p.id, p]));
+  let list;
+  if (state.editing) {
+    list = all.map(p => ({ ...p.draft, id: p.id, categoryId: p.categoryId, parentId: p.parentId, order: p.order, updatedAt: p.updatedAt, raw: p }));
+  } else {
+    const ok = p => p && p.live && (!p.parentId || ok(rawById.get(p.parentId)));
+    list = all.filter(ok).map(p => ({ ...p.live, id: p.id, categoryId: p.categoryId, parentId: p.parentId, order: p.order, updatedAt: p.publishedAt, raw: p }));
+  }
+  const byId = new Map(list.map(p => [p.id, p]));
+  const kids = (catId, parentId) => list.filter(p => p.categoryId === catId && (p.parentId || null) === parentId).sort(byOrder);
+  const cats = [...state.data.categories].sort(byOrder).filter(c => state.editing || kids(c.id, null).length);
+  // Ordre de lecture (pour « page précédente / suivante » et l'accueil).
+  const flat = [];
+  const walk = (catId, parentId) => kids(catId, parentId).forEach(p => { flat.push(p); walk(catId, p.id); });
+  cats.forEach(c => walk(c.id, null));
+  const cat = id => state.data.categories.find(c => c.id === id) || { title: '' };
+  const ancestors = id => { const out = []; let p = byId.get(id); while (p && p.parentId) { p = byId.get(p.parentId); if (p) out.unshift(p); } return out; };
+  return { list, byId, kids, cats, flat, cat, ancestors };
 }
 
 // ---------------------------------------------------------------------------
@@ -129,8 +135,9 @@ function countArticlesDeep(v, catId) {
 // ---------------------------------------------------------------------------
 
 const ALLOWED = {
-  P: [], BR: [], STRONG: [], B: [], EM: [], I: [], U: [], S: [], STRIKE: [], DEL: [], MARK: [], SPAN: [],
-  H2: [], H3: [], H4: [], UL: [], OL: [], LI: [], BLOCKQUOTE: [], HR: [], DIV: ['class'], A: ['href'], IMG: ['src', 'alt'],
+  P: [], BR: [], STRONG: [], B: [], EM: [], I: [], U: [], S: [], DEL: [], SPAN: ['class'], CODE: [],
+  H2: [], H3: [], UL: [], OL: [], LI: [], BLOCKQUOTE: [], HR: [], DIV: ['class'], A: ['href'], IMG: ['src', 'alt'],
+  TABLE: [], THEAD: [], TBODY: [], TR: [], TH: [], TD: [],
 };
 const DROP = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'META', 'LINK', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT']);
 
@@ -144,6 +151,7 @@ function sanitize(html) {
       if (DROP.has(tag)) { child.remove(); continue; }
       clean(child);
       if (tag === 'H1') { const h = doc.createElement('h2'); h.append(...child.childNodes); child.replaceWith(h); continue; }
+      if (tag === 'H4' || tag === 'H5' || tag === 'H6') { const h = doc.createElement('h3'); h.append(...child.childNodes); child.replaceWith(h); continue; }
       if (!ALLOWED[tag]) { child.replaceWith(...child.childNodes); continue; }
       for (const attr of [...child.attributes]) {
         const name = attr.name.toLowerCase();
@@ -151,50 +159,20 @@ function sanitize(html) {
         let keep = ALLOWED[tag].includes(name);
         if (keep && name === 'href') keep = /^(https?:|mailto:|#)/i.test(val);
         if (keep && name === 'src') keep = /^(\/uploads\/|https:)/i.test(val);
-        if (keep && name === 'class') keep = /^callout callout-(info|warn|danger)$/.test(val);
+        if (keep && name === 'class') keep = tag === 'SPAN' ? val === 'hl' : /^callout callout-(info|warn|danger)$/.test(val);
         if (!keep) child.removeAttribute(attr.name);
       }
-      if (tag === 'DIV' && !child.hasAttribute('class')) {
-        const p = doc.createElement('p'); p.append(...child.childNodes); child.replaceWith(p);
-      }
-      if (tag === 'A' && /^https?:/i.test(child.getAttribute('href') || '')) {
-        child.setAttribute('target', '_blank'); child.setAttribute('rel', 'noopener noreferrer');
-      }
+      if (tag === 'DIV' && !child.hasAttribute('class')) { const p = doc.createElement('p'); p.append(...child.childNodes); child.replaceWith(p); }
+      if (tag === 'SPAN' && !child.hasAttribute('class')) { child.replaceWith(...child.childNodes); continue; }
+      if (tag === 'A' && /^https?:/i.test(child.getAttribute('href') || '')) { child.setAttribute('target', '_blank'); child.setAttribute('rel', 'noopener noreferrer'); }
     }
   };
   clean(doc.body);
   return doc.body.innerHTML;
 }
 
-const textOf = html => new DOMParser().parseFromString(html || '', 'text/html').body.textContent.replace(/\s+/g, ' ').trim();
-
 // ---------------------------------------------------------------------------
-// Thème
-// ---------------------------------------------------------------------------
-
-function luminance(hex) {
-  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
-    .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function applyTheme(settings = state.data.settings) {
-  const root = document.documentElement.style;
-  const c = settings.colors;
-  root.setProperty('--accent', c.accent);
-  root.setProperty('--bg', c.background);
-  root.setProperty('--surface', c.surface);
-  root.setProperty('--text', c.text);
-  root.setProperty('--on-accent', luminance(c.accent) > 0.45 ? '#0b0b10' : '#ffffff');
-  document.documentElement.style.colorScheme = luminance(c.background) > 0.5 ? 'light' : 'dark';
-  $('#favicon').href = settings.logo || `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="${c.accent}"/><text x="16" y="22" font-family="Arial" font-weight="700" font-size="16" text-anchor="middle" fill="#fff">${esc(initials(settings.siteName))}</text></svg>`)}`;
-}
-
-const initials = name => (String(name).match(/\b\w/g) || ['R']).slice(0, 2).join('').toUpperCase();
-const logoHtml = (s, cls) => s.logo ? `<img class="${cls}" src="${esc(s.logo)}" alt="">` : `<div class="${cls === 'hero-logo' ? 'hero-mark' : 'brand-mark'}">${esc(initials(s.siteName))}</div>`;
-
-// ---------------------------------------------------------------------------
-// UI commune
+// UI commune : notifications, fenêtres, marque
 // ---------------------------------------------------------------------------
 
 function toast(msg, error = false) {
@@ -208,7 +186,7 @@ async function attempt(fn, okMsg) {
   catch (e) { toast(e.message, true); throw e; }
 }
 
-function modal(title, bodyHtml, { submitLabel = 'Enregistrer', danger = false, onSubmit } = {}) {
+function modal(title, bodyHtml, { submitLabel = 'Enregistrer', danger = false, onSubmit, onCancel } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'modal-backdrop';
   wrap.innerHTML = `<form class="modal" role="dialog" aria-modal="true">
@@ -216,13 +194,14 @@ function modal(title, bodyHtml, { submitLabel = 'Enregistrer', danger = false, o
     <p class="error-msg" data-err></p>
     <div class="modal-actions">
       <button type="button" class="btn" data-cancel>Annuler</button>
-      <button type="submit" class="btn ${danger ? 'btn-danger' : 'btn-primary'}">${esc(submitLabel)}</button>
+      <button type="submit" class="btn ${danger ? 'btn-danger-solid' : 'btn-accent'}">${esc(submitLabel)}</button>
     </div></form>`;
   const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey); };
-  const onKey = e => { if (e.key === 'Escape') close(); };
+  const cancel = () => { close(); if (onCancel) onCancel(); };
+  const onKey = e => { if (e.key === 'Escape') cancel(); };
   document.addEventListener('keydown', onKey);
-  wrap.addEventListener('mousedown', e => { if (e.target === wrap) close(); });
-  $('[data-cancel]', wrap).onclick = close;
+  wrap.addEventListener('mousedown', e => { if (e.target === wrap) cancel(); });
+  $('[data-cancel]', wrap).onclick = cancel;
   wrap.firstElementChild.onsubmit = async e => {
     e.preventDefault();
     const btn = $('button[type=submit]', wrap);
@@ -231,54 +210,269 @@ function modal(title, bodyHtml, { submitLabel = 'Enregistrer', danger = false, o
     catch (err) { $('[data-err]', wrap).textContent = err.message; btn.disabled = false; }
   };
   document.body.append(wrap);
-  ($('input, textarea, select', wrap) || $('button[type=submit]', wrap)).focus();
+  const first = $('input, textarea, select', wrap) || $('button[type=submit]', wrap);
+  first.focus();
+  if (first.select) first.select();
   return wrap;
 }
 
-const confirmBox = (title, text, label = 'Supprimer') =>
-  new Promise(resolve => {
-    const m = modal(title, `<p>${text}</p>`, { submitLabel: label, danger: true, onSubmit: async () => resolve(true) });
-    $('[data-cancel]', m).addEventListener('click', () => resolve(false));
-  });
+const confirmBox = (title, text, label = 'Supprimer') => new Promise(resolve => {
+  modal(title, `<p>${text}</p>`, { submitLabel: label, danger: true, onSubmit: async () => resolve(true), onCancel: () => resolve(false) });
+});
 
-function renderShell() {
+const promptBox = (title, label, value = '', { submitLabel = 'Valider', placeholder = '' } = {}) => new Promise(resolve => {
+  modal(title, `<label class="field"><span>${esc(label)}</span><input type="text" name="v" value="${esc(value)}" placeholder="${esc(placeholder)}" required></label>`,
+    { submitLabel, onSubmit: async f => resolve(String(f.get('v')).trim()), onCancel: () => resolve(null) });
+});
+
+const initials = name => (String(name).match(/\b\w/g) || ['R']).slice(0, 2).join('').toUpperCase();
+const logoHtml = s => s.logo ? `<img class="brand-logo" src="${esc(s.logo)}" alt="">` : `<span class="brand-mark">${esc(initials(s.siteName))}</span>`;
+
+function applyBrand() {
   const s = state.data.settings;
-  const route = location.hash;
-  $('#topbar').innerHTML = `
-    <div class="topbar-inner">
-      <a class="brand" href="#/">${logoHtml(s, '')}<span>${esc(s.siteName)}</span></a>
-      <label class="top-search">${ICON.search}<input type="search" id="top-search" placeholder="Rechercher une règle…" aria-label="Rechercher dans le règlement"></label>
-      <nav class="top-nav">
-        <a class="nav-link ${route.startsWith('#/c/') ? 'active' : ''}" href="#/reglement">Règlement</a>
-        ${loggedIn() ? `<a class="nav-link ${route.startsWith('#/admin') ? 'active' : ''}" href="#/admin">Administration</a>` : ''}
-      </nav>
-    </div>
-    ${loggedIn() ? `<div class="founder-bar"><div class="founder-bar-inner">
-      <img class="mini-avatar" src="${avatarUrl(me())}" alt=""><span>Connecté : <strong>${esc(me().username)}</strong></span>
-      ${me().owner ? '<span class="role-pill">PROPRIÉTAIRE</span>' : ''}
-      <span class="spacer"></span>
-      <label class="toggle" title="Afficher le site exactement comme un joueur (contenu publié uniquement, sans brouillons)"><input type="checkbox" id="civil-toggle" ${state.civilView ? 'checked' : ''}> Voir comme un joueur</label>
-      <button class="linkish" id="logout">Déconnexion</button>
-    </div></div>` : ''}`;
-  $('#footer').innerHTML = `<div class="footer-inner">
-    <span>© ${new Date().getFullYear()} ${esc(s.siteName)} — Règlement officiel</span>
-    ${loggedIn() ? '' : '<a href="#/connexion">Connexion staff</a>'}</div>`;
+  $('#favicon').href = s.logo || `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#e5484d"/><text x="16" y="22" font-family="Arial" font-weight="700" font-size="15" text-anchor="middle" fill="#fff">${esc(initials(s.siteName))}</text></svg>`)}`;
+}
 
-  const search = $('#top-search');
-  if (route.startsWith('#/recherche')) search.value = searchQuery();
-  search.addEventListener('input', () => goSearch(search.value));
-  search.addEventListener('keydown', e => { if (e.key === 'Escape') { search.value = ''; goSearch(''); } });
-  if (loggedIn()) {
-    $('#civil-toggle').onchange = e => { state.civilView = e.target.checked; render(); };
+function closeFloating() {
+  $$('.floating').forEach(el => el.remove());
+  $$('.nav-dd.open').forEach(d => d.classList.remove('open'));
+}
+
+// ---------------------------------------------------------------------------
+// Barre du haut
+// ---------------------------------------------------------------------------
+
+const isExternal = url => /^https?:\/\//i.test(url);
+const linkAttrs = url => `href="${esc(url || '#')}"${isExternal(url) ? ' target="_blank" rel="noopener noreferrer"' : ''}`;
+const navItems = () => state.data.settings.nav.filter(n => !(loggedIn() && n.url === '#/connexion'));
+
+function renderTopbar() {
+  const s = state.data.settings;
+  const items = navItems().map(n => n.children.length
+    ? `<div class="nav-dd"><button type="button" class="nav-link" data-dd>${esc(n.label)} ${ICON.chev}</button>
+        <div class="dd-menu">${n.url ? `<a ${linkAttrs(n.url)}>${esc(n.label)}</a>` : ''}${n.children.map(c => `<a ${linkAttrs(c.url)}>${esc(c.label)}</a>`).join('')}</div></div>`
+    : `<a class="nav-link" ${linkAttrs(n.url)}>${esc(n.label)}</a>`).join('');
+
+  const u = me();
+  const userArea = u ? `
+    ${can('edit') ? `<button type="button" class="btn btn-sm ${state.editing ? 'btn-accent' : ''}" id="edit-toggle" title="Créer et modifier les pages">${ICON.edit}<span class="hide-sm">${state.editing ? 'Quitter l\'édition' : 'Mode édition'}</span></button>` : ''}
+    <div class="nav-dd"><button type="button" class="avatar-btn" data-dd title="${esc(u.username)}"><img src="${avatarUrl(u)}" alt=""></button>
+      <div class="dd-menu dd-right">
+        <div class="dd-head"><strong>${esc(u.username)}</strong><small>${u.owner ? 'Propriétaire' : 'Staff'}</small></div>
+        ${can('edit') ? '<a href="#/admin/historique">Historique des modifications</a>' : ''}
+        ${can('settings') ? '<a href="#/admin/reglages">Réglages du site</a>' : ''}
+        ${u.owner ? '<a href="#/admin/acces">Accès du staff</a>' : ''}
+        <button type="button" id="logout">Déconnexion</button>
+      </div></div>` : '';
+
+  topbar.innerHTML = `<div class="topbar-inner">
+    <button type="button" class="icon-btn burger" id="burger" aria-label="Ouvrir le menu">${ICON.menu}</button>
+    <a class="brand" href="#/">${logoHtml(s)}<span>${esc(s.siteName)}</span></a>
+    <nav class="top-nav">${items}</nav>
+    <span class="spacer"></span>
+    <button type="button" class="search-btn" id="search-btn">${ICON.search}<span>Rechercher...</span><kbd>Ctrl K</kbd></button>
+    ${userArea}
+  </div>`;
+
+  $('#search-btn').onclick = openSearch;
+  $('#burger').onclick = () => document.body.classList.toggle('nav-open');
+  if (u) {
     $('#logout').onclick = async () => {
       if (!confirmLeave()) return;
       await api('POST', '/api/logout');
+      setEditing(false);
       await loadData();
       location.hash = '#/';
       render();
     };
+    const t = $('#edit-toggle');
+    if (t) t.onclick = () => {
+      if (!confirmLeave()) return;
+      setEditing(!state.editing);
+      // En quittant l'édition depuis une page admin, on revient au règlement.
+      if (!state.editing && location.hash.startsWith('#/admin')) location.hash = '#/';
+      render();
+    };
   }
 }
+
+// Menus déroulants : un clic ouvre/ferme, un clic ailleurs ferme.
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-dd]');
+  $$('.nav-dd.open').forEach(d => { if (!t || d !== t.parentElement) d.classList.remove('open'); });
+  if (t) t.parentElement.classList.toggle('open');
+  else if (e.target.closest('.dd-menu a, .dd-menu button')) $$('.nav-dd.open').forEach(d => d.classList.remove('open'));
+});
+
+$('#scrim').onclick = () => document.body.classList.remove('nav-open');
+
+// ---------------------------------------------------------------------------
+// Sidebar gauche
+// ---------------------------------------------------------------------------
+
+const currentPageId = () => { const { parts } = parseRoute(); return parts[0] === 'p' ? parts[1] : null; };
+
+function renderSidebar(M, activeId) {
+  const editing = state.editing;
+  const s = state.data.settings;
+
+  const item = p => {
+    const kids = M.kids(p.categoryId, p.id);
+    const open = kids.length && state.open.has(p.id);
+    const st = editing ? pageStatus(p.raw) : 'live';
+    return `<li data-page="${p.id}" ${editing ? 'draggable="true"' : ''}>
+      <div class="side-item ${p.id === activeId ? 'active' : ''}">
+        <a href="#/p/${p.id}"><span class="side-ico">${esc(p.icon)}</span><span class="side-t">${esc(p.title)}</span>${st !== 'live' ? `<span class="dot dot-${st}" title="${STATUS[st]}"></span>` : ''}</a>
+        ${editing ? `<button type="button" class="side-act" data-add-sub="${p.id}" title="Ajouter une sous-page">${ICON.plus}</button>` : ''}
+        ${kids.length ? `<button type="button" class="side-caret ${open ? 'open' : ''}" data-toggle="${p.id}" aria-label="${open ? 'Replier' : 'Déplier'}">${ICON.chevR}</button>` : ''}
+      </div>
+      ${open ? `<ul>${kids.map(item).join('')}</ul>` : ''}
+    </li>`;
+  };
+
+  // Sur mobile, les liens du haut sont repris dans le menu burger.
+  const mobileNav = navItems().map(n => n.children.length
+    ? `<p class="side-mnav-title">${esc(n.label)}</p>${n.children.map(c => `<a ${linkAttrs(c.url)}>${esc(c.label)}</a>`).join('')}`
+    : `<a ${linkAttrs(n.url)}>${esc(n.label)}</a>`).join('');
+
+  sidebar.innerHTML = `<div class="side-scroll">
+    <nav class="side-mnav">${mobileNav}</nav>
+    ${M.cats.map((c, i) => `<section class="side-cat" data-cat="${c.id}">
+      <div class="side-cat-head"><span class="side-cat-title">${esc(c.title)}</span>
+        ${editing ? `<span class="side-cat-tools">
+          <button type="button" data-cat-move="-1" data-id="${c.id}" title="Monter la catégorie" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
+          <button type="button" data-cat-move="1" data-id="${c.id}" title="Descendre la catégorie" ${i === M.cats.length - 1 ? 'disabled' : ''}>${ICON.down}</button>
+          <button type="button" data-cat-rename="${c.id}" title="Renommer">${ICON.edit}</button>
+          <button type="button" data-cat-del="${c.id}" title="Supprimer la catégorie">${ICON.trash}</button>
+          <button type="button" data-add-page="${c.id}" title="Ajouter une page">${ICON.plus}</button>
+        </span>` : ''}
+      </div>
+      <ul class="side-tree">${M.kids(c.id, null).map(item).join('') || (editing ? '<li class="side-empty">Aucune page. Cliquez sur + ou glissez une page ici.</li>' : '')}</ul>
+    </section>`).join('')}
+    ${editing ? `<button type="button" class="side-new-cat" data-new-cat>${ICON.plus} Nouvelle catégorie</button>
+      <p class="side-tip">💡 Glissez-déposez les pages pour les réorganiser. Lâchez une page <strong>au milieu</strong> d'une autre pour en faire une sous-page.</p>` : ''}
+  </div>
+  ${s.footerNote ? `<div class="side-foot">${ICON.bolt}<span>${esc(s.footerNote)}</span></div>` : ''}`;
+}
+
+const refreshSidebar = () => renderSidebar(model(), currentPageId());
+
+async function createPage(categoryId, parentId = null) {
+  const p = await attempt(() => api('POST', '/api/pages', { categoryId, parentId, title: 'Nouvelle page', icon: '📄' }));
+  if (parentId) { state.open.add(parentId); store.set('rs_open', [...state.open]); }
+  await loadData();
+  state.focusTitle = true;
+  location.hash = `#/p/${p.id}`;
+}
+
+sidebar.addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) { if (e.target.closest('a')) document.body.classList.remove('nav-open'); return; }
+  const d = b.dataset;
+  try {
+    if (d.toggle) {
+      if (state.open.has(d.toggle)) state.open.delete(d.toggle); else state.open.add(d.toggle);
+      store.set('rs_open', [...state.open]);
+      return refreshSidebar();
+    }
+    if (d.addPage) return await createPage(d.addPage);
+    if (d.addSub) { const raw = state.data.pages.find(p => p.id === d.addSub); return await createPage(raw.categoryId, raw.id); }
+    if ('newCat' in d) {
+      const title = await promptBox('Nouvelle catégorie', 'Nom de la catégorie (ex. « Règlement de RedSide V5 »)', '', { submitLabel: 'Créer' });
+      if (!title) return;
+      await attempt(() => api('POST', '/api/categories', { title }), 'Catégorie créée.');
+    }
+    if (d.catRename) {
+      const c = state.data.categories.find(x => x.id === d.catRename);
+      const title = await promptBox('Renommer la catégorie', 'Nom de la catégorie', c.title, { submitLabel: 'Renommer' });
+      if (!title) return;
+      await attempt(() => api('PUT', `/api/categories/${c.id}`, { title }), 'Catégorie renommée.');
+    }
+    if (d.catDel) {
+      const c = state.data.categories.find(x => x.id === d.catDel);
+      const n = state.data.pages.filter(p => p.categoryId === c.id).length;
+      if (!(await confirmBox('Supprimer la catégorie ?', `« ${esc(c.title)} » sera supprimée définitivement${n ? `, <strong>avec ses ${n} page${n > 1 ? 's' : ''}</strong>` : ''}.`))) return;
+      await attempt(() => api('DELETE', `/api/categories/${c.id}`), 'Catégorie supprimée.');
+    }
+    if (d.catMove) {
+      const ids = [...state.data.categories].sort(byOrder).map(c => c.id);
+      const i = ids.indexOf(d.id), j = i + Number(d.catMove);
+      if (j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      await attempt(() => api('POST', '/api/categories/reorder', { ids }));
+    }
+    await loadData();
+    // Ne pas écraser un texte en cours d'écriture dans l'éditeur.
+    if (state.dirty) refreshSidebar(); else render();
+  } catch { /* déjà signalé */ }
+});
+
+// --- Glisser-déposer des pages (mode édition) ---
+let dragId = null;
+const isInside = (id, ancestorId) => {
+  let p = state.data.pages.find(x => x.id === id);
+  while (p) { if (p.id === ancestorId) return true; p = p.parentId && state.data.pages.find(x => x.id === p.parentId); }
+  return false;
+};
+const clearDrop = () => $$('.drop-before, .drop-after, .drop-inside, .drop-cat', sidebar).forEach(el => el.classList.remove('drop-before', 'drop-after', 'drop-inside', 'drop-cat'));
+
+function dropTarget(e) {
+  const row = e.target.closest('.side-item');
+  if (row) {
+    const id = row.parentElement.dataset.page;
+    if (isInside(id, dragId)) return null; // pas sur elle-même ni dans ses sous-pages
+    const r = row.getBoundingClientRect();
+    const y = (e.clientY - r.top) / r.height;
+    return { el: row, id, zone: y < 0.3 ? 'before' : y > 0.7 ? 'after' : 'inside' };
+  }
+  const head = e.target.closest('.side-cat-head, .side-empty');
+  if (head) return { el: head, zone: 'cat', catId: head.closest('[data-cat]').dataset.cat };
+  return null;
+}
+
+sidebar.addEventListener('dragstart', e => {
+  const li = e.target.closest('li[data-page]');
+  if (!li || !state.editing) return;
+  dragId = li.dataset.page;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragId);
+  requestAnimationFrame(() => li.classList.add('dragging'));
+});
+sidebar.addEventListener('dragend', () => { dragId = null; clearDrop(); $$('.dragging', sidebar).forEach(el => el.classList.remove('dragging')); });
+sidebar.addEventListener('dragover', e => {
+  if (!dragId) return;
+  const t = dropTarget(e);
+  clearDrop();
+  if (!t) return;
+  e.preventDefault();
+  t.el.classList.add(`drop-${t.zone}`);
+});
+sidebar.addEventListener('drop', async e => {
+  if (!dragId) return;
+  const t = dropTarget(e);
+  clearDrop();
+  if (!t) return;
+  e.preventDefault();
+  const id = dragId;
+  let dest;
+  if (t.zone === 'cat') dest = { categoryId: t.catId, parentId: null, index: 9999 };
+  else {
+    const target = state.data.pages.find(p => p.id === t.id);
+    if (t.zone === 'inside') {
+      dest = { categoryId: target.categoryId, parentId: target.id, index: 9999 };
+      state.open.add(target.id);
+      store.set('rs_open', [...state.open]);
+    } else {
+      const siblings = state.data.pages.filter(p => p.categoryId === target.categoryId && (p.parentId || null) === (target.parentId || null) && p.id !== id).sort(byOrder);
+      dest = { categoryId: target.categoryId, parentId: target.parentId || null, index: siblings.findIndex(p => p.id === target.id) + (t.zone === 'after' ? 1 : 0) };
+    }
+  }
+  try {
+    await attempt(() => api('POST', '/api/pages/move', { id, ...dest }), 'Page déplacée.');
+    await loadData();
+    if (state.dirty) refreshSidebar(); else render();
+  } catch { /* déjà signalé */ }
+});
 
 // ---------------------------------------------------------------------------
 // Routeur
@@ -298,700 +492,643 @@ function confirmLeave() {
 
 window.addEventListener('hashchange', () => {
   if (!confirmLeave()) { history.replaceState(null, '', state.lastHash); return; }
-  state.dirty = false;
   render();
 });
 window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 function render() {
   state.lastHash = location.hash;
-  app.onclick = app.onkeydown = null;
-  renderShell();
-  const { parts, params } = parseRoute();
-  const [p0, p1, p2] = parts;
+  state.dirty = false;
+  editor = null;
+  closeFloating();
+  document.body.classList.remove('nav-open');
+  document.body.classList.toggle('is-editing', state.editing);
+  main.onclick = main.oninput = main.onkeydown = null;
+  renderTopbar();
+  setToc([]);
   window.scrollTo(0, 0);
 
-  if (!p0) return renderHome();
-  if (p0 === 'reglement') return renderReglement();
-  if (p0 === 'c') return renderCategory(p1, p2);
-  if (p0 === 'recherche') return renderSearch();
-  if (p0 === 'connexion') return loggedIn() ? (location.hash = '#/admin') : renderLogin(params);
+  const M = model();
+  const { parts, params } = parseRoute();
+  const [p0, p1] = parts;
+  const siteName = state.data.settings.siteName;
+
+  if (!p0) {
+    if (M.flat[0]) { history.replaceState(null, '', `#/p/${M.flat[0].id}`); return render(); }
+    renderSidebar(M, null);
+    return renderEmpty();
+  }
+  if (p0 === 'p') {
+    // La page ouverte et ses parents sont dépliés dans la sidebar.
+    [p1, ...M.ancestors(p1).map(a => a.id)].forEach(x => state.open.add(x));
+    store.set('rs_open', [...state.open]);
+    renderSidebar(M, p1);
+    return state.editing ? renderEditor(M, p1) : renderPage(M, p1, params);
+  }
+  renderSidebar(M, null);
+  if (p0 === 'connexion') { document.title = `Connexion — ${siteName}`; return loggedIn() ? (location.hash = '#/admin') : renderLogin(params); }
   if (p0 === 'admin') {
     if (!loggedIn()) { location.hash = '#/connexion'; return; }
-    if (p1 === 'article') return can('edit') ? renderEditor(p2, params.get('cat')) : renderDenied();
-    if (p1 === 'apparence') return can('appearance') ? renderAppearance() : renderDenied();
+    if (p1 === 'reglages') return can('settings') ? renderSettings() : renderDenied();
+    if (p1 === 'historique') return can('edit') ? renderHistory(params) : renderDenied();
     if (p1 === 'acces') return me().owner ? renderAccess() : renderDenied();
-    if (can('edit') || can('publish')) return renderAdminTree();
-    if (can('appearance')) { history.replaceState(null, '', '#/admin/apparence'); return renderAppearance(); }
+    // Après connexion : on ouvre directement le mode édition sur le règlement.
+    if (can('edit')) { setEditing(true); location.hash = '#/'; return; }
+    if (can('settings')) { location.hash = '#/admin/reglages'; return; }
     return renderDenied();
   }
   renderNotFound();
 }
 
+function renderEmpty() {
+  document.title = state.data.settings.siteName;
+  main.innerHTML = state.editing
+    ? `<div class="empty"><h2>Le règlement est vide</h2><p>1. Créez une catégorie avec le bouton <strong>« Nouvelle catégorie »</strong> dans le menu de gauche.<br>2. Ajoutez-y une page avec le bouton <strong>+</strong>.</p>
+        <button class="btn btn-accent" id="first-cat">${ICON.plus} Créer une catégorie</button></div>`
+    : `<div class="empty"><h2>Le règlement n'est pas encore publié</h2><p>Revenez un peu plus tard.</p>${can('edit') ? '<p>Vous faites partie du staff : activez le <strong>Mode édition</strong> en haut à droite pour le rédiger.</p>' : ''}</div>`;
+  const b = $('#first-cat');
+  if (b) b.onclick = () => $('[data-new-cat]', sidebar).click();
+}
+
 function renderDenied() {
-  app.innerHTML = `${adminHeader(null)}<div class="empty">Vous n'avez pas encore d'accès sur cette partie. Demandez au propriétaire de vous en donner.</div>`;
+  main.innerHTML = '<div class="empty"><h2>Accès refusé</h2><p>Vous n\'avez pas encore d\'accès sur cette partie. Demandez au propriétaire de vous en donner.</p></div>';
 }
 
 function renderNotFound() {
-  app.innerHTML = `<div class="empty"><h2>Page introuvable</h2><p><a href="#/">Retour à l'accueil</a></p></div>`;
+  main.innerHTML = '<div class="empty"><h2>Page introuvable</h2><p><a href="#/">Retour à l\'accueil</a></p></div>';
 }
 
 // ---------------------------------------------------------------------------
-// Accueil
+// Lecture d'une page
 // ---------------------------------------------------------------------------
 
-function renderHome() {
-  const s = state.data.settings;
-  const v = visible();
-  const nums = numbering(v);
-  const tops = childCats(v, null);
-  const lastUpdate = v.articles.reduce((m, a) => Math.max(m, a.updatedAt || 0), 0);
-  const recent = v.articles.filter(a => a.updatedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 5);
-  document.title = `${s.siteName} — Règlement`;
-  app.innerHTML = `
-    <section class="hero">
-      ${logoHtml(s, 'hero-logo')}
-      <h1>${esc(s.siteName)}</h1>
-      ${s.tagline ? `<p>${esc(s.tagline)}</p>` : ''}
-      <label class="hero-search">${ICON.search}<input type="search" id="hero-search" placeholder="Rechercher une règle, un mot-clé… (ex. freekill)" aria-label="Rechercher dans le règlement"></label>
-      ${tops.length ? `<a class="btn btn-primary btn-lg" href="#/c/${tops[0].id}">Lire le règlement</a>` : ''}
-      ${v.articles.length ? `<div class="hero-stats">
-        <span><strong>${tops.length}</strong> catégorie${tops.length > 1 ? 's' : ''}</span>
-        <span><strong>${v.articles.length}</strong> article${v.articles.length > 1 ? 's' : ''}</span>
-        ${lastUpdate ? `<span>Mis à jour le <strong>${fmtDate(lastUpdate)}</strong></span>` : ''}
-      </div>` : ''}
-    </section>
-
-    ${tops.length ? `<h2 class="section-title">Comment lire ce règlement</h2>
-    <div class="guide-grid">
-      <div class="guide-card"><span class="guide-ico">📖</span><h3>Les numéros</h3>
-        <p>Chaque règle a un numéro. <strong>Article 2.1.3</strong> = catégorie 2, section 1, article 3. Citez ce numéro quand vous parlez d'une règle au staff.</p></div>
-      <div class="guide-card"><span class="guide-ico">🔎</span><h3>Trouver une règle</h3>
-        <p>Tapez un mot dans la barre de recherche (<em>freekill</em>, <em>braquage</em>…) : les règles concernées s'affichent tout de suite.</p></div>
-      <div class="guide-card"><span class="guide-ico">🎨</span><h3>Les encadrés</h3>
-        <p><span class="chip chip-info">ℹ Information</span> conseil ou précision<br>
-        <span class="chip chip-warn">⚠ Important</span> point à ne pas rater<br>
-        <span class="chip chip-danger">⛔ Sanction</span> punition prévue</p></div>
-      <div class="guide-card"><span class="guide-ico">🔗</span><h3>Partager</h3>
-        <p>Sous chaque article, le bouton <strong>« Copier le lien »</strong> donne un lien direct à coller sur Discord.</p></div>
+function docHtml(p, M, { preview = false } = {}) {
+  const kids = M.kids(p.categoryId, p.id);
+  const i = M.flat.findIndex(x => x.id === p.id);
+  const prev = i > 0 ? M.flat[i - 1] : null, next = i >= 0 ? M.flat[i + 1] : null;
+  return `<article class="doc">
+    <div class="doc-top">
+      <span class="doc-cat">${esc(M.cat(p.categoryId).title)}</span>
+      ${preview ? '' : `<button type="button" class="btn btn-sm btn-ghost" data-copy-page title="Copier le texte de la page">${ICON.copy} Copier</button>`}
     </div>
-    <p class="accept-note">En jouant sur ${esc(s.siteName)}, vous vous engagez à connaître et respecter ce règlement. Le non-respect peut entraîner des sanctions.</p>
-
-    <h2 class="section-title">Catégories du règlement</h2>
-      <div class="cat-grid">${tops.map(c => {
-        const subs = childCats(v, c.id);
-        const n = countArticlesDeep(v, c.id);
-        const arts = catArticles(v, c.id);
-        return `<a class="cat-card" href="#/c/${c.id}">
-          <div class="cat-card-top"><span class="cat-num">${nums.cat.get(c.id)}</span>${c.published ? '' : '<span class="badge badge-draft">Brouillon</span>'}</div>
-          <h3>${esc(c.title)}</h3>
-          ${c.description ? `<p>${esc(c.description)}</p>` : ''}
-          ${arts.length ? `<ul class="cat-preview">${arts.slice(0, 3).map(a => `<li><span>${nums.art.get(a.id)}</span>${esc(a.title)}</li>`).join('')}
-            ${arts.length > 3 ? `<li class="more">et ${arts.length - 3} autre${arts.length - 3 > 1 ? 's' : ''}…</li>` : ''}</ul>` : ''}
-          <div class="meta">${plural(n, 'article')}${subs.length ? ` · ${plural(subs.length, 'sous-catégorie')}` : ''}<span class="go">Lire ${ICON.right}</span></div>
-        </a>`;
-      }).join('')}</div>
-
-    ${recent.length ? `<h2 class="section-title">Dernières modifications</h2>
-      <div class="recent">${recent.map(a => `<a href="#/c/${a.categoryId}/${a.id}">
-        <span class="recent-num">Art. ${nums.art.get(a.id)}</span>
-        <span class="recent-title">${esc(a.title)}</span>
-        <span class="recent-date">${fmtDate(a.updatedAt)}</span></a>`).join('')}</div>` : ''}`
-      : `<div class="empty">${editing() ? 'Aucune catégorie pour le moment. <a href="#/admin">Créer la première catégorie</a>.' : "Le règlement n'est pas encore publié."}</div>`}`;
-  $('#hero-search').addEventListener('input', e => goSearch(e.target.value));
-}
-
-// ---------------------------------------------------------------------------
-// Lecture du règlement
-// ---------------------------------------------------------------------------
-
-function renderReglement() {
-  const first = childCats(visible(), null)[0];
-  if (first) { history.replaceState(null, '', `#/c/${first.id}`); return render(); }
-  renderHome();
-}
-
-function sidebarHtml(v, nums, activeId) {
-  const activePath = new Set(ancestors(v, activeId).map(c => c.id));
-  const list = parentId => {
-    const cats = childCats(v, parentId);
-    if (!cats.length) return '';
-    return `<ul>${cats.map(c => `<li>
-      <a href="#/c/${c.id}" class="${c.id === activeId ? 'active' : ''}"><span class="n">${nums.cat.get(c.id)}</span><span>${esc(c.title)}</span></a>
-      ${activePath.has(c.id) || parentId === null ? list(c.id) : ''}</li>`).join('')}</ul>`;
-  };
-  return `<aside class="sidebar"><details open><summary>Sommaire</summary>
-    <p class="sidebar-title">Sommaire</p>${list(null)}</details></aside>`;
-}
-
-function articleHtml(a, num, preview = false) {
-  return `<article class="rule ${a.published ? '' : 'is-draft'}" id="art-${a.id}">
-    <header class="rule-head">
-      <span class="rule-num">Article ${esc(num)}</span>
-      <h3>${esc(a.title)}</h3>
-      ${a.published || preview ? '' : '<span class="badge badge-draft">Brouillon</span>'}
-      ${!preview && editing() ? `<span class="tools"><a class="btn btn-sm" href="#/admin/article/${a.id}">${ICON.edit} Modifier</a></span>` : ''}
-    </header>
-    <div class="prose">${sanitize(a.content)}</div>
-    ${preview ? '' : `<footer class="rule-foot">
-      ${a.updatedAt ? `<span>Mis à jour le ${fmtDate(a.updatedAt)}</span>` : '<span></span>'}
-      <button type="button" class="linkish" data-copy="#/c/${a.categoryId}/${a.id}">${ICON.link} Copier le lien</button>
-    </footer>`}
+    <h1 class="doc-title"><span class="doc-ico">${esc(p.icon)}</span><span>${esc(p.title)}</span></h1>
+    ${p.description ? `<p class="doc-desc">${esc(p.description)}</p>` : ''}
+    <div class="prose" id="prose">${sanitize(p.content)}</div>
+    ${kids.length ? `<div class="sub-cards">${kids.map(k => `<a class="sub-card" href="#/p/${k.id}"><span class="side-ico">${esc(k.icon)}</span><span><strong>${esc(k.title)}</strong>${k.description ? `<small>${esc(k.description)}</small>` : ''}</span>${ICON.chevR}</a>`).join('')}</div>` : ''}
+    ${p.updatedAt ? `<p class="doc-meta">Dernière mise à jour le ${fmtDate(p.updatedAt)}</p>` : ''}
+    ${preview ? '' : `<nav class="pager">
+      ${prev ? `<a class="pager-link" href="#/p/${prev.id}">${ICON.left}<span><small>Page précédente</small>${esc(prev.icon)} ${esc(prev.title)}</span></a>` : '<span></span>'}
+      ${next ? `<a class="pager-link next" href="#/p/${next.id}"><span><small>Page suivante</small>${esc(next.icon)} ${esc(next.title)}</span>${ICON.right}</a>` : '<span></span>'}
+    </nav>`}
   </article>`;
 }
 
-function sectionHtml(v, nums, c, depth) {
-  const arts = catArticles(v, c.id);
-  const subs = childCats(v, c.id);
-  const H = depth === 0 ? 'h1' : 'h2';
-  return `<section class="cat-section" id="cat-${c.id}">
-    <div class="cat-head">
-      <span class="num">${depth === 0 ? 'Catégorie' : 'Section'} ${nums.cat.get(c.id)}</span>
-      ${c.published ? '' : ' <span class="badge badge-draft">Brouillon</span>'}
-      <${H}>${esc(c.title)}</${H}>
-      ${c.description ? `<p>${esc(c.description)}</p>` : ''}
-    </div>
-    ${arts.map(a => articleHtml(a, nums.art.get(a.id))).join('')}
-    ${!arts.length && !subs.length ? `<div class="empty">Aucun article dans cette catégorie.${editing() ? ` <a href="#/admin/article/new?cat=${c.id}">Ajouter un article</a>` : ''}</div>` : ''}
-    ${subs.map(sc => sectionHtml(v, nums, sc, depth + 1)).join('')}
-  </section>`;
+// Prépare le contenu affiché : ancres des titres, tableaux défilants, table des matières.
+function enhanceProse(prose) {
+  const used = new Set();
+  const heads = $$('h2, h3', prose).map(h => {
+    let id = `s-${norm(h.textContent).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section'}`;
+    while (used.has(id)) id += '-';
+    used.add(id);
+    h.id = id;
+    return { id, text: h.textContent.trim(), level: h.tagName === 'H2' ? 2 : 3 };
+  }).filter(h => h.text);
+  $$('table', prose).forEach(t => {
+    if (t.parentElement.classList.contains('table-wrap')) return;
+    const w = document.createElement('div');
+    w.className = 'table-wrap';
+    t.replaceWith(w);
+    w.append(t);
+  });
+  setToc(heads);
 }
 
-function renderCategory(id, articleId) {
-  const v = visible();
-  const c = findCat(v, id);
-  if (!c) return renderNotFound();
-  const nums = numbering(v);
-  const path = ancestors(v, id);
-  // Tous les articles affichés sur la page (catégorie + sous-sections), dans l'ordre de lecture.
-  const pageArticles = [];
-  const collect = cid => { pageArticles.push(...catArticles(v, cid)); childCats(v, cid).forEach(sc => collect(sc.id)); };
-  collect(c.id);
-  // Catégorie précédente / suivante dans l'ordre du sommaire.
-  const flat = [];
-  const walk = parentId => childCats(v, parentId).forEach(x => { flat.push(x); walk(x.id); });
-  walk(null);
-  const i = flat.findIndex(x => x.id === id);
-  const prev = flat[i - 1], next = flat[i + 1];
-  document.title = `${c.title} — ${state.data.settings.siteName}`;
-  app.innerHTML = `<div class="reader">
-    ${sidebarHtml(v, nums, id)}
-    <div>
-      <nav class="crumbs"><a href="#/">Accueil</a>${path.map(p => ` › <a href="#/c/${p.id}">${esc(p.title)}</a>`).join('')}</nav>
-      ${editing() ? `<p style="margin:-6px 0 18px"><a class="btn btn-sm" href="#/admin/article/new?cat=${c.id}">${ICON.plus} Ajouter un article ici</a></p>` : ''}
-      ${pageArticles.length > 1 ? `<nav class="page-toc"><span class="page-toc-title">Dans cette page · ${plural(pageArticles.length, 'article')}</span>
-        <div>${pageArticles.map(a => `<a href="#" data-jump="${a.id}"><span>${nums.art.get(a.id)}</span>${esc(a.title)}</a>`).join('')}</div></nav>` : ''}
-      ${sectionHtml(v, nums, c, 0)}
-      <nav class="pager">
-        ${prev ? `<a class="pager-link" href="#/c/${prev.id}">${ICON.left}<span><small>Précédent</small>${nums.cat.get(prev.id)}. ${esc(prev.title)}</span></a>` : '<span></span>'}
-        ${next ? `<a class="pager-link next" href="#/c/${next.id}"><span><small>Suivant</small>${nums.cat.get(next.id)}. ${esc(next.title)}</span>${ICON.right}</a>` : '<span></span>'}
-      </nav>
-    </div></div>`;
-
-  const jumpTo = artId => {
-    const el = document.getElementById(`art-${artId}`);
-    if (!el) return;
-    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    el.classList.add('flash');
-    setTimeout(() => el.classList.remove('flash'), 1800);
-  };
-  if (articleId) requestAnimationFrame(() => jumpTo(articleId));
-
-  app.onclick = e => {
-    const jump = e.target.closest('[data-jump]');
-    if (jump) { e.preventDefault(); return jumpTo(jump.dataset.jump); }
-    const copy = e.target.closest('[data-copy]');
-    if (copy) {
-      const url = `${location.origin}/${copy.dataset.copy}`;
-      navigator.clipboard.writeText(url).then(() => toast('Lien copié : collez-le sur Discord.'), () => toast(url));
+function renderPage(M, id, params) {
+  const p = M.byId.get(id);
+  if (!p) {
+    const raw = state.data.pages.find(x => x.id === id);
+    if (raw && can('edit')) {
+      main.innerHTML = `<div class="empty"><h2>Cette page n'est pas publiée</h2><p>Les joueurs ne la voient pas encore.</p><button class="btn btn-accent" id="go-edit">${ICON.edit} Ouvrir en mode édition</button></div>`;
+      $('#go-edit').onclick = () => { setEditing(true); render(); };
+      return;
     }
+    return renderNotFound();
+  }
+  document.title = `${p.title} — ${state.data.settings.siteName}`;
+  main.innerHTML = docHtml(p, M);
+  const prose = $('#prose');
+  enhanceProse(prose);
+
+  if (params.get('s')) requestAnimationFrame(() => scrollToHeading(params.get('s')));
+  else if (params.get('q')) requestAnimationFrame(() => highlightInPage(prose, params.get('q')));
+
+  main.onclick = e => {
+    if (!e.target.closest('[data-copy-page]')) return;
+    const text = `${p.title}\n\n${p.description ? `${p.description}\n\n` : ''}${prose.innerText.trim()}`;
+    navigator.clipboard.writeText(text).then(() => toast('Contenu de la page copié.'), () => toast('Copie impossible dans ce navigateur.', true));
   };
 }
 
-// ---------------------------------------------------------------------------
-// Recherche
-// ---------------------------------------------------------------------------
-
-const searchQuery = () => parseRoute().params.get('q') || '';
-
-function goSearch(q) {
-  const hash = q.trim() ? `#/recherche?q=${encodeURIComponent(q)}` : '#/recherche';
-  if (location.hash.startsWith('#/recherche')) {
-    history.replaceState(null, '', hash);
-    state.lastHash = hash;
-    renderSearchResults();
-    const top = $('#top-search');
-    if (top && document.activeElement !== top) top.value = q;
-  } else if (q.trim()) {
-    history.pushState(null, '', hash);
-    render();
-    const top = $('#top-search');
-    top.value = q;
-    top.focus();
+// Surligne la première occurrence du mot recherché et y fait défiler la page.
+function highlightInPage(root, q) {
+  const term = q.trim().split(/\s+/)[0];
+  if (!term) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    let i = n.data.toLowerCase().indexOf(term.toLowerCase());
+    // Recherche sans accents seulement si elle ne décale pas les positions dans le texte.
+    if (i < 0 && norm(n.data).length === n.data.length) i = norm(n.data).indexOf(norm(term));
+    if (i < 0) continue;
+    const r = document.createRange();
+    r.setStart(n, i); r.setEnd(n, i + term.length);
+    const mark = document.createElement('mark');
+    mark.className = 'search-hit';
+    r.surroundContents(mark);
+    window.scrollTo({ top: mark.getBoundingClientRect().top + scrollY - 140, behavior: 'smooth' });
+    setTimeout(() => mark.replaceWith(...mark.childNodes), 4000);
+    return;
   }
 }
 
-function renderSearch() {
-  document.title = `Recherche — ${state.data.settings.siteName}`;
-  app.innerHTML = `<div class="search-head"><h1>Recherche</h1><p class="hint" id="search-count"></p></div><div id="results"></div>`;
-  renderSearchResults();
-  const top = $('#top-search');
-  if (top && !top.value) top.focus();
+// --- Table des matières (« Sur cette page ») ---
+function setToc(heads) {
+  state.heads = heads;
+  toc.innerHTML = heads.length ? `<div class="toc-inner"><p class="toc-title">Sur cette page</p>
+    <ul>${heads.map(h => `<li class="lvl-${h.level}"><a href="#" data-toc="${h.id}">${esc(h.text)}</a></li>`).join('')}</ul></div>` : '';
+  spy();
 }
+
+function scrollToHeading(id) {
+  const el = document.getElementById(id);
+  if (el) window.scrollTo({ top: el.getBoundingClientRect().top + scrollY - 84, behavior: 'smooth' });
+}
+
+toc.addEventListener('click', e => {
+  const a = e.target.closest('[data-toc]');
+  if (!a) return;
+  e.preventDefault();
+  scrollToHeading(a.dataset.toc);
+});
+
+// Surligne dans la table des matières la section en cours de lecture.
+function spy() {
+  if (!state.heads.length) return;
+  let active = state.heads[0].id;
+  for (const h of state.heads) {
+    const el = document.getElementById(h.id);
+    if (el && el.getBoundingClientRect().top < 120) active = h.id;
+  }
+  // En bas de page, la dernière section est forcément celle qu'on lit.
+  if (window.innerHeight + scrollY >= document.documentElement.scrollHeight - 4) active = state.heads[state.heads.length - 1].id;
+  $$('[data-toc]', toc).forEach(a => a.classList.toggle('active', a.dataset.toc === active));
+}
+let spyQueued = false;
+window.addEventListener('scroll', () => {
+  if (spyQueued) return;
+  spyQueued = true;
+  requestAnimationFrame(() => { spyQueued = false; spy(); });
+}, { passive: true });
+
+// ---------------------------------------------------------------------------
+// Recherche (Ctrl + K)
+// ---------------------------------------------------------------------------
 
 function highlight(text, terms) {
   let out = esc(text);
   for (const t of terms) {
     if (!t) continue;
-    const re = new RegExp(esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    out = out.replace(re, m => `<mark>${m}</mark>`);
+    out = out.replace(new RegExp(esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), m => `<mark>${m}</mark>`);
   }
   return out;
 }
 
 function snippet(text, term) {
-  if (!term) return text.slice(0, 180);
-  const i = norm(text).indexOf(norm(term));
-  if (i < 0) return text.slice(0, 180) + (text.length > 180 ? '…' : '');
-  const start = Math.max(0, i - 60);
-  return (start ? '…' : '') + text.slice(start, start + 200) + (start + 200 < text.length ? '…' : '');
+  const i = term ? norm(text).indexOf(norm(term)) : -1;
+  if (i < 0) return text.slice(0, 140) + (text.length > 140 ? '…' : '');
+  const start = Math.max(0, i - 50);
+  return (start ? '…' : '') + text.slice(start, start + 170) + (start + 170 < text.length ? '…' : '');
 }
 
-function renderSearchResults() {
-  const results = $('#results');
-  if (!results) return;
-  const q = searchQuery().trim();
-  const terms = norm(q).split(/\s+/).filter(Boolean);
-  const count = $('#search-count');
-  if (!terms.length) {
-    count.textContent = 'Tapez un mot-clé dans la barre de recherche (ex. « freekill », « braquage »).';
-    results.innerHTML = '';
-    return;
-  }
-  const v = visible();
-  const nums = numbering(v);
-  const matches = (...fields) => terms.every(t => fields.some(f => norm(f).includes(t)));
-  const where = catId => ancestors(v, catId).map(c => c.title).join(' › ');
-  // Les termes saisis sont surlignés tels quels (accents compris) : on surligne la saisie brute.
-  const rawTerms = q.split(/\s+/).filter(Boolean);
-
-  const cats = v.categories.filter(c => matches(c.title, c.description));
-  const arts = v.articles
-    .map(a => ({ a, text: textOf(a.content) }))
-    .filter(({ a, text }) => matches(a.title, text))
-    .sort((x, y) => (matches(y.a.title) - matches(x.a.title)));
-
-  const total = cats.length + arts.length;
-  count.textContent = total ? `${total} résultat${total > 1 ? 's' : ''} pour « ${q} »` : `Aucun résultat pour « ${q} ».`;
-  results.innerHTML = [
-    ...cats.map(c => `<a class="result" href="#/c/${c.id}">
-      <span class="where">Catégorie ${nums.cat.get(c.id)}</span>
-      <h3>${highlight(c.title, rawTerms)}</h3>${c.description ? `<p>${highlight(c.description, rawTerms)}</p>` : ''}</a>`),
-    ...arts.map(({ a, text }) => `<a class="result" href="#/c/${a.categoryId}/${a.id}">
-      <span class="where">Article ${nums.art.get(a.id)} · ${esc(where(a.categoryId))}</span>
-      <h3>${highlight(a.title, rawTerms)}</h3><p>${highlight(snippet(text, rawTerms[0]), rawTerms)}</p></a>`),
-  ].join('');
-}
-
-// ---------------------------------------------------------------------------
-// Connexion Discord
-// ---------------------------------------------------------------------------
-
-const DISCORD_LOGO = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.6 1.3a18.4 18.4 0 0 0-5.6 0L8.6 3a19.7 19.7 0 0 0-4.9 1.4C.6 9-.3 13.6.1 18.1a19.9 19.9 0 0 0 6 3l1.3-2.1a12.9 12.9 0 0 1-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2.1a19.8 19.8 0 0 0 6-3c.5-5.2-.9-9.8-3.6-13.7ZM8 15.4c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Z"/></svg>';
-
-function renderLogin(params) {
-  document.title = `Connexion — ${state.data.settings.siteName}`;
-  const err = params.get('erreur');
-  const id = params.get('id') || '';
-  const messages = {
-    refuse: `<p><strong>Accès refusé.</strong> Votre compte Discord n'est pas autorisé. Votre demande a été transmise au propriétaire.</p>
-      <p>Votre ID Discord : <code class="copy-id" title="Cliquer pour copier">${esc(id)}</code></p>`,
-    config: "<p>La connexion Discord n'est pas encore configurée sur le serveur (fichier <code>config.json</code>).</p>",
-    discord: '<p>Discord a renvoyé une erreur. Réessayez dans quelques instants.</p>',
-    annule: '<p>Connexion annulée ou expirée. Réessayez.</p>',
-  };
-  app.innerHTML = `<div class="card auth">
-    <h1>Connexion staff</h1>
-    <p class="hint">Réservé aux personnes autorisées par le propriétaire. Le règlement reste consultable par tous, sans connexion.</p>
-    ${err && messages[err] ? `<div class="auth-alert">${messages[err]}</div>` : ''}
-    ${state.data.discordReady
-      ? `<a class="btn btn-discord btn-lg" href="/auth/discord" style="width:100%">${DISCORD_LOGO} Se connecter avec Discord</a>`
-      : '<p class="error-msg">Connexion Discord non configurée sur le serveur (variables DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET et OWNER_DISCORD_ID).</p>'}
-    <ol class="auth-steps">
-      <li>Cliquez sur <strong>« Se connecter avec Discord »</strong> et acceptez.</li>
-      <li>Si vous êtes autorisé, vous arrivez directement dans l'administration.</li>
-      <li>Sinon, votre demande est envoyée au propriétaire : il pourra vous donner l'accès.</li>
-    </ol>
+function openSearch() {
+  if ($('.palette-backdrop')) return;
+  closeFloating();
+  const M = model();
+  const index = M.list.map(p => ({ p, text: textOf(p.content), where: [M.cat(p.categoryId).title, ...M.ancestors(p.id).map(a => a.title)].join(' › ') }));
+  const wrap = document.createElement('div');
+  wrap.className = 'palette-backdrop';
+  wrap.innerHTML = `<div class="palette" role="dialog" aria-modal="true" aria-label="Rechercher">
+    <label class="palette-input">${ICON.search}<input type="search" placeholder="Rechercher une règle, un mot-clé…" autocomplete="off"><kbd>Échap</kbd></label>
+    <div class="palette-results"></div>
+    <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> naviguer</span><span><kbd>Entrée</kbd> ouvrir</span></div>
   </div>`;
-  const copy = $('.copy-id');
-  if (copy) copy.onclick = () => navigator.clipboard.writeText(id).then(() => toast('ID copié.'));
-}
+  document.body.append(wrap);
+  const input = $('input', wrap), results = $('.palette-results', wrap);
+  let hits = [], sel = 0;
 
-// ---------------------------------------------------------------------------
-// Administration — organisation du règlement
-// ---------------------------------------------------------------------------
-
-function adminHeader(active, extra = '') {
-  const tab = (href, key, label) => `<a href="${href}" class="${active === key ? 'active' : ''}">${label}</a>`;
-  return `<div class="admin-head"><h1>Administration</h1><span class="spacer"></span>${extra}</div>
-    <nav class="tabs">${can('edit') || can('publish') ? tab('#/admin', 'tree', 'Règlement') : ''}${can('appearance') ? tab('#/admin/apparence', 'look', 'Apparence') : ''}${me().owner ? tab('#/admin/acces', 'access', 'Accès') : ''}</nav>`;
-}
-
-const statusBadge = (published, hiddenByParent) =>
-  published ? (hiddenByParent ? '<span class="badge badge-hidden" title="Publié, mais masqué car une catégorie parente est en brouillon">Masqué</span>' : '<span class="badge badge-live">Publié</span>')
-    : '<span class="badge badge-draft">Brouillon</span>';
-
-function renderAdminTree() {
-  document.title = `Administration — ${state.data.settings.siteName}`;
-  const v = { categories: state.data.categories, articles: state.data.articles };
-  const nums = numbering(v);
-  const canEdit = can('edit'), canPublish = can('publish');
-  const byId = new Map(v.categories.map(c => [c.id, c]));
-  const parentHidden = c => !!c.parentId && (() => { const p = byId.get(c.parentId); return !p.published || parentHidden(p); })();
-
-  const catHtml = (c, i, siblings) => {
-    const arts = catArticles(v, c.id);
-    const subs = childCats(v, c.id);
-    const hidden = parentHidden(c);
-    return `<li class="adm-cat">
-      <div class="adm-row">
-        <span class="n">${nums.cat.get(c.id)}</span>
-        <div class="title"><strong>${esc(c.title)}</strong>${c.description ? `<small>${esc(c.description)}</small>` : ''}</div>
-        ${statusBadge(c.published, hidden)}
-        <div class="actions">
-          ${canEdit ? `<button class="icon-btn" data-act="cat-move" data-dir="-1" data-id="${c.id}" title="Monter" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
-          <button class="icon-btn" data-act="cat-move" data-dir="1" data-id="${c.id}" title="Descendre" ${i === siblings.length - 1 ? 'disabled' : ''}>${ICON.down}</button>` : ''}
-          ${canEdit ? `<button class="btn btn-sm" data-act="art-new" data-id="${c.id}" title="Ajouter un article dans cette catégorie">${ICON.plus} Article</button>
-          <button class="btn btn-sm" data-act="cat-new" data-id="${c.id}" title="Ajouter une sous-catégorie">${ICON.plus} Sous-catégorie</button>` : ''}
-          ${canPublish ? `<button class="btn btn-sm ${c.published ? '' : 'btn-primary'}" data-act="cat-toggle" data-id="${c.id}" title="${c.published ? 'Cacher aux joueurs' : 'Rendre visible pour les joueurs'}">${c.published ? `${ICON.eyeOff} Dépublier` : `${ICON.eye} Publier`}</button>` : ''}
-          ${canEdit ? `<button class="icon-btn" data-act="cat-edit" data-id="${c.id}" title="Modifier titre, description, emplacement">${ICON.edit}</button>
-          <button class="icon-btn danger" data-act="cat-delete" data-id="${c.id}" title="Supprimer">${ICON.trash}</button>` : ''}
-        </div>
-      </div>
-      <ul>${arts.length ? arts.map((a, j) => `<li class="adm-art"><div class="adm-row">
-          <span class="n">${nums.art.get(a.id)}</span>
-          <div class="title"><strong>${esc(a.title)}</strong></div>
-          ${statusBadge(a.published, hidden || !c.published)}
-          <div class="actions">
-            ${canEdit ? `<button class="icon-btn" data-act="art-move" data-dir="-1" data-id="${a.id}" title="Monter" ${j === 0 ? 'disabled' : ''}>${ICON.up}</button>
-            <button class="icon-btn" data-act="art-move" data-dir="1" data-id="${a.id}" title="Descendre" ${j === arts.length - 1 ? 'disabled' : ''}>${ICON.down}</button>` : ''}
-            ${canPublish ? `<button class="btn btn-sm ${a.published ? '' : 'btn-primary'}" data-act="art-toggle" data-id="${a.id}" title="${a.published ? 'Cacher aux joueurs' : 'Rendre visible pour les joueurs'}">${a.published ? 'Dépublier' : 'Publier'}</button>` : ''}
-            ${canEdit ? `<a class="btn btn-sm" href="#/admin/article/${a.id}" title="Ouvrir l'éditeur">${ICON.edit} Modifier</a>
-            <button class="icon-btn danger" data-act="art-delete" data-id="${a.id}" title="Supprimer">${ICON.trash}</button>` : ''}
-          </div></div></li>`).join('')
-        : '<li class="adm-empty">Aucun article.</li>'}</ul>
-      <ul class="adm-children">${subs.map(catHtml).join('')}</ul>
-    </li>`;
+  const close = () => wrap.remove();
+  const go = h => { close(); location.hash = `#/p/${h.p.id}${input.value.trim() ? `?q=${encodeURIComponent(input.value.trim())}` : ''}`; };
+  const draw = () => {
+    const q = input.value.trim();
+    const terms = norm(q).split(/\s+/).filter(Boolean);
+    const raw = q.split(/\s+/).filter(Boolean);
+    if (!terms.length) {
+      hits = index.slice(0, 8);
+    } else {
+      hits = index.map(h => {
+        const inTitle = terms.every(t => norm(h.p.title).includes(t));
+        const inAll = terms.every(t => norm(`${h.p.title} ${h.p.description} ${h.text}`).includes(t));
+        return inAll ? { ...h, score: inTitle ? 2 : 1 } : null;
+      }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 20);
+    }
+    sel = Math.min(sel, Math.max(0, hits.length - 1));
+    results.innerHTML = hits.length ? hits.map((h, i) => `<a href="#/p/${h.p.id}" class="palette-hit ${i === sel ? 'sel' : ''}" data-i="${i}">
+      <span class="side-ico">${esc(h.p.icon)}</span>
+      <span class="palette-text"><small>${esc(h.where)}</small><strong>${highlight(h.p.title, raw)}</strong>
+      ${terms.length ? `<span>${highlight(snippet(`${h.p.description} ${h.text}`.trim(), raw[0]), raw)}</span>` : ''}</span></a>`).join('')
+      : `<p class="palette-empty">Aucun résultat pour « ${esc(q)} ».</p>`;
+    const cur = $('.sel', results);
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
   };
 
-  const tops = childCats(v, null);
-  const drafts = v.categories.filter(c => !c.published).length + v.articles.filter(a => !a.published).length;
-  app.innerHTML = `${adminHeader('tree', canEdit ? `<button class="btn btn-primary" data-act="cat-new">${ICON.plus} Nouvelle catégorie</button>` : '')}
-    <div class="adm-stats">
-      <div><strong>${v.categories.length}</strong><span>catégorie${v.categories.length > 1 ? 's' : ''}</span></div>
-      <div><strong>${v.articles.length}</strong><span>article${v.articles.length > 1 ? 's' : ''}</span></div>
-      <div class="${drafts ? 'is-warn' : ''}"><strong>${drafts}</strong><span>brouillon${drafts > 1 ? 's' : ''} (invisible${drafts > 1 ? 's' : ''} pour les joueurs)</span></div>
-    </div>
-    <details class="help-box" ${tops.length ? '' : 'open'}>
-      <summary>❓ Comment modifier le règlement ? (guide rapide)</summary>
-      <ol class="help-steps">
-        ${canEdit ? `<li><strong>Créez une catégorie</strong> avec le bouton « Nouvelle catégorie » (ex. « Règles générales », « Roleplay »).</li>
-        <li><strong>Ajoutez des articles</strong> avec le bouton « + Article » de la catégorie. Un article = une règle.</li>` : ''}
-        ${canPublish ? `<li><strong>Publiez</strong> : tout ce qui est en <span class="badge badge-draft">Brouillon</span> est invisible pour les joueurs. Cliquez sur « Publier » quand c'est prêt.</li>`
-          : '<li>Vous ne pouvez pas publier : une personne ayant l\'accès « Publier » rendra vos articles visibles.</li>'}
-        <li><strong>Vérifiez</strong> en cochant « Voir comme un joueur » dans la barre en haut : vous voyez le site exactement comme eux.</li>
-      </ol>
-      <div class="help-legend">
-        <span><span class="badge badge-live">Publié</span> visible par tous</span>
-        <span><span class="badge badge-draft">Brouillon</span> visible uniquement par le staff</span>
-        <span><span class="badge badge-hidden">Masqué</span> publié, mais sa catégorie est en brouillon</span>
-        ${canEdit ? `<span>${ICON.up}${ICON.down} changer l'ordre (les numéros se mettent à jour tout seuls)</span>
-        <span>${ICON.edit} modifier · ${ICON.trash} supprimer</span>` : ''}
-      </div>
-    </details>
-    ${tops.length ? `<ul class="adm-tree">${tops.map(catHtml).join('')}</ul>` : '<div class="empty">Aucune catégorie. Commencez par en créer une avec le bouton « Nouvelle catégorie ».</div>'}`;
-
-  app.onclick = async e => {
-    const b = e.target.closest('[data-act]');
-    if (!b || !app.contains(b)) return;
-    const { act, id } = b.dataset;
-    const dir = Number(b.dataset.dir);
-    try {
-      if (act === 'cat-new') return categoryModal(null, id || null);
-      if (act === 'cat-edit') return categoryModal(byId.get(id));
-      if (act === 'art-new') { location.hash = `#/admin/article/new?cat=${id}`; return; }
-      if (act === 'cat-toggle') {
-        const c = byId.get(id);
-        await attempt(() => api('PUT', `/api/categories/${id}`, { published: !c.published }), c.published ? 'Catégorie dépubliée.' : 'Catégorie publiée.');
-      }
-      if (act === 'art-toggle') {
-        const a = v.articles.find(x => x.id === id);
-        await attempt(() => api('PUT', `/api/articles/${id}`, { published: !a.published }), a.published ? 'Article dépublié.' : 'Article publié.');
-      }
-      if (act === 'cat-move') {
-        const c = byId.get(id);
-        await reorder('categories', childCats(v, c.parentId || null), id, dir);
-      }
-      if (act === 'art-move') {
-        const a = v.articles.find(x => x.id === id);
-        await reorder('articles', catArticles(v, a.categoryId), id, dir);
-      }
-      if (act === 'cat-delete') {
-        const c = byId.get(id);
-        const n = countArticlesDeep(v, id);
-        const subs = childCats(v, id).length;
-        const ok = await confirmBox('Supprimer la catégorie ?',
-          `« ${esc(c.title)} » sera supprimée définitivement${n || subs ? `, avec <strong>${n} article${n > 1 ? 's' : ''}</strong>${subs ? ` et ses sous-catégories` : ''}` : ''}.`);
-        if (!ok) return;
-        await attempt(() => api('DELETE', `/api/categories/${id}`), 'Catégorie supprimée.');
-      }
-      if (act === 'art-delete') {
-        const a = v.articles.find(x => x.id === id);
-        if (!(await confirmBox("Supprimer l'article ?", `« ${esc(a.title)} » sera supprimé définitivement.`))) return;
-        await attempt(() => api('DELETE', `/api/articles/${id}`), 'Article supprimé.');
-      }
-      await loadData();
-      renderAdminTree();
-    } catch { /* déjà signalé par toast */ }
-  };
-}
-
-async function reorder(kind, list, id, dir) {
-  const ids = list.map(x => x.id);
-  const i = ids.indexOf(id);
-  const j = i + dir;
-  if (j < 0 || j >= ids.length) return;
-  [ids[i], ids[j]] = [ids[j], ids[i]];
-  await attempt(() => api('POST', `/api/${kind}/reorder`, { ids }));
-}
-
-function categoryOptions(selectedId, excludeId, { allowRoot = true } = {}) {
-  const v = { categories: state.data.categories, articles: [] };
-  const nums = numbering(v);
-  const out = allowRoot ? [`<option value="">— Aucune (catégorie principale) —</option>`] : [];
-  const walk = (parentId, depth) => childCats(v, parentId).forEach(c => {
-    if (c.id === excludeId) return; // exclut la catégorie et toute sa descendance
-    out.push(`<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${'   '.repeat(depth)}${nums.cat.get(c.id)}. ${esc(c.title)}</option>`);
-    walk(c.id, depth + 1);
+  input.addEventListener('input', () => { sel = 0; draw(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, hits.length - 1); draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); draw(); }
+    else if (e.key === 'Enter' && hits[sel]) { e.preventDefault(); go(hits[sel]); }
+    else if (e.key === 'Escape') close();
   });
-  walk(null, 0);
-  return out.join('');
+  results.addEventListener('click', e => { const a = e.target.closest('[data-i]'); if (a) { e.preventDefault(); go(hits[Number(a.dataset.i)]); } });
+  wrap.addEventListener('mousedown', e => { if (e.target === wrap) close(); });
+  draw();
+  input.focus();
 }
 
-function categoryModal(cat, parentId = null) {
-  const isNew = !cat;
-  modal(isNew ? (parentId ? 'Nouvelle sous-catégorie' : 'Nouvelle catégorie') : 'Modifier la catégorie', `
-    <label class="field"><span>Titre</span><input type="text" name="title" maxlength="120" required value="${esc(cat ? cat.title : '')}"></label>
-    <label class="field"><span>Description</span><textarea name="description" maxlength="500" rows="3">${esc(cat ? cat.description : '')}</textarea></label>
-    <label class="field"><span>Catégorie parente</span><select name="parentId">${categoryOptions(cat ? cat.parentId : parentId, cat && cat.id)}</select></label>
-    ${can('publish') ? `<label class="toggle"><input type="checkbox" name="published" ${cat && cat.published ? 'checked' : ''}> Publiée (visible par tous)</label>` : ''}`,
-  {
-    submitLabel: isNew ? 'Créer' : 'Enregistrer',
-    onSubmit: async f => {
-      const body = { title: f.get('title'), description: f.get('description'), parentId: f.get('parentId') || null };
-      if (can('publish')) body.published = f.get('published') === 'on';
-      if (isNew) {
-        await api('POST', '/api/categories', body);
-        toast('Catégorie créée.');
-      } else {
-        await api('PUT', `/api/categories/${cat.id}`, body);
-        toast('Catégorie mise à jour.');
-      }
-      await loadData();
-      render();
-    },
-  });
-}
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openSearch(); }
+});
 
 // ---------------------------------------------------------------------------
-// Administration — éditeur d'article
+// Mode édition : éditeur de page par blocs
 // ---------------------------------------------------------------------------
 
-const TOOLBAR = [
-  ['bold', '<b>G</b>', 'Gras (Ctrl+B)'], ['italic', '<i>I</i>', 'Italique (Ctrl+I)'], ['underline', '<u>S</u>', 'Souligné (Ctrl+U)'], ['strikeThrough', '<s>B</s>', 'Barré'],
-  '|', ['h2', 'Titre', 'Gros titre'], ['h3', 'Sous-titre', 'Petit titre'], ['p', 'Texte', 'Paragraphe normal'],
-  '|', ['insertUnorderedList', '• Liste', 'Liste à puces'], ['insertOrderedList', '1. Liste', 'Liste numérotée'], ['blockquote', '❝', 'Citation'],
-  '|', ['callout-info', 'ℹ Info', 'Encadré information'], ['callout-warn', '⚠ Important', 'Encadré important'], ['callout-danger', '⛔ Sanction', 'Encadré sanction'],
-  '|', ['link', '🔗', 'Insérer un lien'], ['image', '🖼 Image', 'Insérer une image'], ['insertHorizontalRule', '―', 'Séparateur'],
-  '|', ['removeFormat', '⌫', 'Effacer la mise en forme'], ['undo', '↶', 'Annuler (Ctrl+Z)'], ['redo', '↷', 'Rétablir (Ctrl+Y)'],
+const EMOJIS = ['📄', '📜', '📘', '📖', '📌', '📢', '👋', '⚖️', '🚫', '⚠️', '✅', '❌', 'ℹ️', '🔒', '👮', '🚓', '🚑', '🚒', '🔫', '🔪', '💰', '💵', '🏦', '💎',
+  '🚗', '🏍️', '🚁', '✈️', '🏠', '🏢', '🏥', '🍔', '🍕', '☕', '🍽️', '🎭', '🎮', '🎲', '🎉', '🛒', '🧾', '🛠️', '⚙️', '🧭', '🗺️', '📍', '⏰', '📅',
+  '💬', '📣', '👥', '👤', '👑', '⭐', '🔥', '💀', '🩸', '💊', '🕵️', '🏛️', '🚀', '❤️'];
+
+// Blocs proposés par le menu « / ».
+const BLOCKS = [
+  { label: 'Texte', desc: 'Paragraphe normal', ico: '¶', kw: 'texte paragraphe normal', run: ed => ed.formatBlock('p') },
+  { label: 'Titre', desc: 'Grand titre de section', ico: 'H2', kw: 'titre h2 section', run: ed => ed.formatBlock('h2') },
+  { label: 'Sous-titre', desc: 'Petit titre', ico: 'H3', kw: 'sous-titre h3', run: ed => ed.formatBlock('h3') },
+  { label: 'Liste à puces', desc: 'Liste simple', ico: '•', kw: 'liste puces ul', run: () => document.execCommand('insertUnorderedList') },
+  { label: 'Liste numérotée', desc: '1, 2, 3…', ico: '1.', kw: 'liste numerotee ol', run: () => document.execCommand('insertOrderedList') },
+  { label: 'Encadré info', desc: 'Conseil ou précision', ico: 'ℹ️', kw: 'encadre info callout bleu', run: ed => ed.callout('info') },
+  { label: 'Encadré attention', desc: 'Point important', ico: '⚠️', kw: 'encadre attention important warning', run: ed => ed.callout('warn') },
+  { label: 'Encadré interdit', desc: 'Interdiction ou sanction', ico: '⛔', kw: 'encadre interdit sanction danger', run: ed => ed.callout('danger') },
+  { label: 'Image (envoyer)', desc: 'Depuis votre ordinateur', ico: '🖼️', kw: 'image photo upload envoyer', run: ed => ed.imageUpload() },
+  { label: 'Image (lien)', desc: 'À partir d\'une adresse https://', ico: '🔗', kw: 'image lien url', run: ed => ed.imageUrl() },
+  { label: 'Tableau', desc: 'Lignes et colonnes', ico: '📊', kw: 'tableau table grille', run: ed => ed.table() },
+  { label: 'Séparateur', desc: 'Ligne horizontale', ico: '―', kw: 'separateur ligne hr', run: ed => ed.hr() },
+  { label: 'Citation', desc: 'Texte cité', ico: '❝', kw: 'citation quote', run: ed => ed.formatBlock('blockquote') },
 ];
 
-function renderEditor(id, catParam) {
-  const isNew = id === 'new';
-  const existing = isNew ? null : state.data.articles.find(a => a.id === id);
-  if (!isNew && !existing) return renderNotFound();
-  const draft = existing
-    ? { ...existing }
-    : { id: null, title: '', content: '', published: false, categoryId: catParam || (childCats(state.data, null)[0] || {}).id };
-  if (!draft.categoryId) {
-    app.innerHTML = `<div class="empty">Créez d'abord une catégorie pour pouvoir ajouter des articles. <a href="#/admin">Organiser le règlement</a></div>`;
-    return;
-  }
+const closestEl = (node, sel, root) => {
+  const el = node && (node.nodeType === 1 ? node : node.parentElement);
+  const found = el && el.closest(sel);
+  return found && (!root || root.contains(found)) ? found : null;
+};
+
+function placeCaret(el, atEnd = false) {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(!atEnd);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
+// Sélectionne le texte d'une cellule : ce qu'on tape remplace « Colonne 1 ».
+function selectCell(cell) {
+  const r = document.createRange();
+  r.selectNodeContents(cell);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
+function floatAt(el, rect, { above = false } = {}) {
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let top = above ? rect.top - h - 8 : rect.bottom + 6;
+  if (!above && top + h > innerHeight - 8) top = rect.top - h - 6;
+  if (top < 8) top = rect.bottom + 6;
+  el.style.top = `${top}px`;
+  el.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - w - 8))}px`;
+}
+
+function iconPicker(anchor, onPick) {
+  closeFloating();
+  const pop = document.createElement('div');
+  pop.className = 'floating ico-pop';
+  pop.innerHTML = `<p class="ico-pop-title">Choisir une icône</p>
+    <div class="ico-grid">${EMOJIS.map(e => `<button type="button" data-e="${e}">${e}</button>`).join('')}</div>
+    <label class="field"><span>Ou collez un emoji</span><input type="text" maxlength="8" placeholder="ex. 🚓"></label>`;
+  document.body.append(pop);
+  floatAt(pop, anchor.getBoundingClientRect());
+  const done = v => { pop.remove(); document.removeEventListener('mousedown', outside); if (v) onPick(v); };
+  const outside = e => { if (!pop.contains(e.target) && e.target !== anchor) done(null); };
+  setTimeout(() => document.addEventListener('mousedown', outside));
+  pop.onclick = e => { const b = e.target.closest('[data-e]'); if (b) done(b.dataset.e); };
+  const input = $('input', pop);
+  input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); } if (e.key === 'Escape') done(null); };
+}
+
+function renderEditor(M, id) {
+  let raw = state.data.pages.find(p => p.id === id);
+  if (!raw) return renderNotFound();
+  const d = { ...raw.draft };
+  let categoryId = raw.categoryId;
   let previewing = false;
-  document.title = `${isNew ? 'Nouvel article' : draft.title} — Éditeur`;
+  document.title = `✏ ${d.title} — Édition`;
 
-  app.innerHTML = `
-    <nav class="crumbs"><a href="#/admin">Administration</a> › ${isNew ? 'Nouvel article' : 'Modifier un article'}</nav>
-    <div class="editor-wrap">
-      <div>
-        <div id="edit-pane">
-          <input type="text" class="editor-title" id="ed-title" placeholder="Titre de l'article" maxlength="160" value="${esc(draft.title)}">
-          <div class="toolbar" id="ed-toolbar">${TOOLBAR.map(t => t === '|' ? '<span class="sep"></span>'
-            : `<button type="button" data-cmd="${t[0]}" title="${esc(t[2])}">${t[1]}</button>`).join('')}</div>
-          <div class="editor prose" id="ed-body" contenteditable="true" data-placeholder="Rédigez le contenu de l'article…">${sanitize(draft.content)}</div>
+  main.innerHTML = `
+    <div class="edit-bar">
+      <span class="edit-status" id="ed-status"></span>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn-sm" id="ed-preview">${ICON.eye} Aperçu</button>
+      <a class="btn btn-sm hide-sm" href="#/admin/historique?page=${id}">${ICON.clock} Historique</a>
+      <button type="button" class="btn btn-sm" id="ed-save">Enregistrer</button>
+      ${can('publish') ? '<button type="button" class="btn btn-sm btn-accent" id="ed-publish">Publier</button>' : ''}
+      <div class="nav-dd"><button type="button" class="icon-btn" data-dd title="Plus d'actions">${ICON.dots}</button>
+        <div class="dd-menu dd-right">
+          <a href="#/admin/historique?page=${id}">Historique de cette page</a>
+          ${can('publish') ? '<button type="button" data-ed="unpublish" id="ed-unpublish">Dépublier (cacher aux joueurs)</button>' : ''}
+          <button type="button" data-ed="delete" class="danger">Supprimer la page</button>
+        </div></div>
+    </div>
+    ${can('publish') ? '' : '<p class="edit-note">Vous pouvez enregistrer, mais pas publier : une personne ayant l\'accès « Publier » rendra vos changements visibles.</p>'}
+    <div id="ed-area">
+      <article class="doc doc-edit">
+        <div class="doc-top">
+          <label class="cat-pick" title="Catégorie de la page">${ICON.folder}<select id="ed-cat">${state.data.categories.slice().sort(byOrder).map(c => `<option value="${c.id}" ${c.id === categoryId ? 'selected' : ''}>${esc(c.title)}</option>`).join('')}</select></label>
         </div>
-        <div id="preview-pane" hidden></div>
-      </div>
-      <aside>
-        <div class="side-card">
-          <h4>Publication</h4>
-          <div class="status-line" id="ed-status"></div>
-          <button class="btn" id="ed-preview">${ICON.eye} Prévisualiser</button>
-          <button class="btn" id="ed-save">Enregistrer</button>
-          <button class="btn btn-primary" id="ed-publish"></button>
-          ${can('publish') ? '' : '<p class="hint">Vous pouvez enregistrer, mais pas publier : une personne ayant l\'accès « Publier » s\'en chargera.</p>'}
-          <p class="warn-note" id="ed-warn" hidden></p>
-        </div>
-        <div class="side-card">
-          <h4>Emplacement</h4>
-          <label class="field" style="margin:0"><span>Catégorie</span><select id="ed-cat">${categoryOptions(draft.categoryId, null, { allowRoot: false })}</select></label>
-        </div>
-        <details class="side-card help-card" open>
-          <summary><h4>Aide à la rédaction</h4></summary>
-          <ul>
-            <li><strong>Une règle = un article</strong>, avec un titre court et clair (ex. « Freekill »).</li>
-            <li>Mettez les mots importants en <b>gras</b> (sélectionnez le texte puis <b>G</b>).</li>
-            <li><b>⛔ Sanction</b> : indiquez la punition prévue (ex. « avertissement puis ban 24 h »).</li>
-            <li><b>⚠ Important</b> : un point à ne pas rater. <b>ℹ Info</b> : un conseil ou un exemple.</li>
-            <li>Image : bouton 🖼, ou glissez / collez une image directement dans le texte.</li>
-            <li><b>Ctrl + S</b> enregistre. « Prévisualiser » montre le rendu pour les joueurs.</li>
-            <li>Les numéros (Article 2.1.3) sont calculés automatiquement.</li>
-          </ul>
-        </details>
-        ${isNew ? '' : `<div class="side-card"><h4>Zone de danger</h4><button class="btn btn-danger" id="ed-delete">${ICON.trash} Supprimer l'article</button></div>`}
-      </aside>
-    </div>`;
+        <h1 class="doc-title"><button type="button" class="doc-ico ico-btn" id="ed-icon" title="Changer l'icône">${esc(d.icon)}</button><input id="ed-title" class="title-input" maxlength="160" placeholder="Titre de la page" value="${esc(d.title)}"></h1>
+        <textarea id="ed-desc" class="desc-input" rows="1" maxlength="400" placeholder="Ajoutez une courte description, affichée sous le titre…">${esc(d.description)}</textarea>
+        <div class="prose editor" id="ed-body" contenteditable="true" spellcheck="true" data-placeholder="Commencez à écrire, ou tapez « / » pour insérer un titre, une liste, une image, un encadré…">${sanitize(d.content) || '<p><br></p>'}</div>
+        <p class="ed-help">💡 Tapez <kbd>/</kbd> pour insérer un bloc · Sélectionnez du texte pour le mettre en <b>gras</b>, en <span class="hl">rouge</span> ou en lien · <kbd>Ctrl</kbd> + <kbd>S</kbd> pour enregistrer</p>
+      </article>
+    </div>
+    <div id="ed-preview-pane" hidden></div>`;
 
-  const title = $('#ed-title'), body = $('#ed-body'), catSel = $('#ed-cat');
+  const title = $('#ed-title'), desc = $('#ed-desc'), body = $('#ed-body'), catSel = $('#ed-cat'), iconBtn = $('#ed-icon');
   document.execCommand('defaultParagraphSeparator', false, 'p');
-  if (!body.innerHTML.trim()) body.innerHTML = '';
-  (isNew ? title : body).focus();
 
-  const markDirty = () => { state.dirty = true; refreshStatus(); };
+  const autosize = () => { desc.style.height = 'auto'; desc.style.height = `${desc.scrollHeight}px`; };
+  autosize();
+  const refreshEmpty = () => body.classList.toggle('is-empty', !body.textContent.trim() && !body.querySelector('img, table, hr'));
+  refreshEmpty();
+
+  let tocTimer = null;
+  const markDirty = () => {
+    state.dirty = true;
+    refreshStatus();
+    refreshEmpty();
+    clearTimeout(tocTimer);
+    tocTimer = setTimeout(() => enhanceToc(), 400);
+  };
+  // Table des matières en direct à partir des titres de l'éditeur (les id ne sont pas enregistrés).
+  const enhanceToc = () => {
+    const heads = $$('h2, h3', body).map((h, i) => { h.id = `s-ed-${i}`; return { id: h.id, text: h.textContent.trim(), level: h.tagName === 'H2' ? 2 : 3 }; }).filter(h => h.text);
+    setToc(heads);
+  };
+  enhanceToc();
+
+  if (state.focusTitle) { state.focusTitle = false; title.focus(); title.select(); }
+
   title.addEventListener('input', markDirty);
-  body.addEventListener('input', markDirty);
-  catSel.addEventListener('change', markDirty);
+  desc.addEventListener('input', () => { autosize(); markDirty(); });
+  catSel.addEventListener('change', () => { categoryId = catSel.value; markDirty(); });
+  iconBtn.onclick = () => iconPicker(iconBtn, v => { d.icon = v; iconBtn.textContent = v; markDirty(); });
 
   function refreshStatus() {
-    $('#ed-status').innerHTML = `${draft.published ? '<span class="badge badge-live">Publié</span>' : '<span class="badge badge-draft">Brouillon</span>'}
-      ${state.dirty ? '<span class="dirty-dot">● Non enregistré</span>' : (draft.id ? '<span class="hint">Enregistré</span>' : '')}`;
-    $('#ed-publish').textContent = draft.published ? (state.dirty ? 'Enregistrer et garder publié' : 'Dépublier') : 'Publier';
-    $('#ed-publish').className = `btn ${draft.published && !state.dirty ? '' : 'btn-primary'}`;
-    $('#ed-publish').hidden = !can('publish');
-    $('#ed-save').textContent = draft.published ? 'Enregistrer' : 'Enregistrer le brouillon';
-    $('#ed-save').disabled = !state.dirty && !!draft.id;
-    // Avertit si l'article publié reste invisible à cause d'une catégorie en brouillon.
-    const cats = state.data.categories;
-    const hidden = (cid) => { const c = cats.find(x => x.id === cid); return !c || !c.published || (c.parentId && hidden(c.parentId)); };
-    const warn = $('#ed-warn');
-    warn.hidden = !hidden(catSel.value);
-    warn.textContent = 'La catégorie (ou une catégorie parente) est en brouillon : cet article restera invisible pour les joueurs tant qu\'elle n\'est pas publiée.';
+    const st = pageStatus(raw);
+    $('#ed-status').innerHTML = `<span class="badge badge-${st}">${STATUS[st]}</span>
+      ${state.dirty ? '<span class="dirty-dot">● Non enregistré</span>' : `<span class="muted hide-sm">Enregistré le ${fmtDate(raw.updatedAt)} à ${fmtTime(raw.updatedAt)}${raw.updatedBy ? ` par ${esc(raw.updatedBy)}` : ''}</span>`}`;
+    $('#ed-save').disabled = !state.dirty;
+    const pub = $('#ed-publish');
+    if (pub) pub.disabled = !state.dirty && st === 'live';
+    const unpub = $('#ed-unpublish');
+    if (unpub) unpub.hidden = !raw.live;
   }
   refreshStatus();
 
-  async function save(published) {
-    const payload = { title: title.value.trim() || 'Sans titre', content: sanitize(body.innerHTML), categoryId: catSel.value, published };
-    const saved = await attempt(() => draft.id ? api('PUT', `/api/articles/${draft.id}`, payload) : api('POST', '/api/articles', payload),
-      published && !draft.published ? 'Article publié.' : !published && draft.published ? 'Article dépublié.' : 'Article enregistré.');
-    Object.assign(draft, saved);
+  async function save(quiet = false) {
+    const payload = { title: title.value.trim() || 'Sans titre', icon: d.icon, description: desc.value.trim(), content: sanitize(body.innerHTML), categoryId };
+    await attempt(() => api('PUT', `/api/pages/${id}`, payload), quiet ? null : 'Page enregistrée (brouillon).');
     state.dirty = false;
     await loadData();
-    if (isNew) {
-      history.replaceState(null, '', `#/admin/article/${saved.id}`);
-      state.lastHash = location.hash;
-    }
+    raw = state.data.pages.find(p => p.id === id);
+    refreshSidebar();
     refreshStatus();
   }
 
-  $('#ed-save').onclick = () => save(draft.published).catch(() => {});
-  $('#ed-publish').onclick = () => save(draft.published ? state.dirty : true).catch(() => {});
-  if (!isNew) $('#ed-delete').onclick = async () => {
-    if (!(await confirmBox("Supprimer l'article ?", `« ${esc(draft.title)} » sera supprimé définitivement.`))) return;
-    await attempt(() => api('DELETE', `/api/articles/${draft.id}`), 'Article supprimé.').catch(() => {});
-    state.dirty = false;
-    await loadData();
-    location.hash = '#/admin';
+  $('#ed-save').onclick = () => save().catch(() => {});
+  const pubBtn = $('#ed-publish');
+  if (pubBtn) pubBtn.onclick = async () => {
+    try {
+      if (state.dirty) await save(true);
+      await attempt(() => api('POST', `/api/pages/${id}/publish`), 'Page publiée : visible par tous les joueurs.');
+      await loadData();
+      raw = state.data.pages.find(p => p.id === id);
+      refreshSidebar();
+      refreshStatus();
+    } catch { /* déjà signalé */ }
   };
 
   $('#ed-preview').onclick = () => {
     previewing = !previewing;
-    $('#edit-pane').hidden = previewing;
-    $('#preview-pane').hidden = !previewing;
-    $('#ed-preview').innerHTML = previewing ? `${ICON.edit} Retour à l'édition` : `${ICON.eye} Prévisualiser`;
-    if (!previewing) return body.focus();
-    // Simule la numérotation qu'aura l'article une fois publié, dans sa catégorie.
-    const v = { categories: state.data.categories, articles: state.data.articles };
-    const nums = numbering(v);
-    const list = catArticles(v, catSel.value);
-    const idx = list.findIndex(a => a.id === draft.id);
-    const pos = (idx >= 0 ? idx : list.length) + 1;
-    const fake = { ...draft, title: title.value.trim() || 'Sans titre', content: body.innerHTML, categoryId: catSel.value, published: true };
-    const crumb = ancestors(v, catSel.value).map(c => esc(c.title)).join(' › ');
-    $('#preview-pane').innerHTML = `<div class="preview-banner">${ICON.eye}<span><strong>Aperçu</strong> — voici comment les joueurs verront cet article une fois publié.</span></div>
-      <nav class="crumbs">Accueil › ${crumb}</nav>${articleHtml(fake, `${nums.cat.get(catSel.value)}.${pos}`, true)}`;
+    closeFloating();
+    $('#ed-area').hidden = previewing;
+    const pane = $('#ed-preview-pane');
+    pane.hidden = !previewing;
+    $('#ed-preview').innerHTML = previewing ? `${ICON.edit} Retour à l'édition` : `${ICON.eye} Aperçu`;
+    if (!previewing) { pane.innerHTML = ''; enhanceToc(); return body.focus(); }
+    const fake = { id, categoryId, parentId: raw.parentId, icon: d.icon, title: title.value.trim() || 'Sans titre', description: desc.value.trim(), content: body.innerHTML, updatedAt: Date.now() };
+    pane.innerHTML = `<div class="preview-banner">${ICON.eye}<span><strong>Aperçu</strong> — voici exactement ce que verront les joueurs une fois la page publiée.</span></div>${docHtml(fake, model(), { preview: true })}`;
+    enhanceProse($('.prose', pane));
   };
 
-  // Barre d'outils
-  const toolbar = $('#ed-toolbar');
-  toolbar.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
-  toolbar.addEventListener('click', async e => {
-    const btn = e.target.closest('button');
-    if (!btn) return;
-    const cmd = btn.dataset.cmd;
-    body.focus();
-    if (cmd === 'h2' || cmd === 'h3' || cmd === 'p' || cmd === 'blockquote') document.execCommand('formatBlock', false, cmd);
-    else if (cmd.startsWith('callout-')) {
-      const label = { 'callout-info': 'Information', 'callout-warn': 'Important', 'callout-danger': 'Sanction' }[cmd];
-      const sel = window.getSelection().toString();
-      document.execCommand('insertHTML', false, `<div class="callout ${cmd}"><p><strong>${label} :</strong> ${esc(sel) || '…'}</p></div><p><br></p>`);
-    } else if (cmd === 'link') {
-      const url = prompt('Adresse du lien (https://…) :', 'https://');
-      if (url && /^(https?:|mailto:|#)/i.test(url.trim())) document.execCommand('createLink', false, url.trim());
-      else if (url) toast('Lien invalide : il doit commencer par https://', true);
-    } else if (cmd === 'image') {
-      const sel = saveSelection();
+  main.onclick = async e => {
+    const b = e.target.closest('[data-ed]');
+    if (!b) return;
+    try {
+      if (b.dataset.ed === 'unpublish') {
+        if (!(await confirmBox('Dépublier la page ?', 'Les joueurs ne verront plus cette page (ni ses sous-pages). Le contenu est conservé.', 'Dépublier'))) return;
+        await attempt(() => api('POST', `/api/pages/${id}/unpublish`), 'Page dépubliée.');
+        await loadData();
+        raw = state.data.pages.find(p => p.id === id);
+        refreshSidebar();
+        refreshStatus();
+      }
+      if (b.dataset.ed === 'delete') {
+        const n = state.data.pages.filter(p => isInside(p.id, id)).length - 1;
+        if (!(await confirmBox('Supprimer la page ?', `« ${esc(title.value || d.title)} » sera supprimée définitivement${n > 0 ? `, <strong>avec ses ${n} sous-page${n > 1 ? 's' : ''}</strong>` : ''}.`))) return;
+        await attempt(() => api('DELETE', `/api/pages/${id}`), 'Page supprimée.');
+        state.dirty = false;
+        await loadData();
+        location.hash = '#/';
+      }
+    } catch { /* déjà signalé */ }
+  };
+
+  // Ctrl + S pour enregistrer
+  main.onkeydown = e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (state.dirty) save().catch(() => {}); }
+  };
+
+  // --- Actions de l'éditeur (utilisées par le menu « / » et les barres flottantes) ---
+  const ed = {
+    body, markDirty,
+    formatBlock(tag) { document.execCommand('formatBlock', false, tag); },
+    // Insère un bloc ; sur une ligne vide, il la remplace au lieu de s'empiler dessous.
+    insertBlock(html) {
+      const s = getSelection();
+      let block = s.rangeCount ? s.anchorNode : null;
+      while (block && block !== body && block.parentNode !== body) block = block.parentNode;
+      if (block && block !== body && block.nodeType === 1 && block.tagName === 'P' && !block.textContent.trim() && !block.querySelector('img')) {
+        const r = document.createRange(); r.selectNode(block); s.removeAllRanges(); s.addRange(r);
+      }
+      document.execCommand('insertHTML', false, html);
+      const el = body.querySelector('[data-new]');
+      if (el) el.removeAttribute('data-new');
+      return el;
+    },
+    callout(kind) {
+      const el = ed.insertBlock(`<div class="callout callout-${kind}" data-new><p><br></p></div><p><br></p>`);
+      if (el && el.firstElementChild) placeCaret(el.firstElementChild);
+    },
+    table() {
+      const row = cell => `<tr>${cell.repeat(3)}</tr>`;
+      const el = ed.insertBlock(`<table data-new><thead><tr><th>Colonne 1</th><th>Colonne 2</th><th>Colonne 3</th></tr></thead><tbody>${row('<td><br></td>').repeat(2)}</tbody></table><p><br></p>`);
+      if (el) selectCell($('th', el));
+    },
+    hr() {
+      const el = ed.insertBlock('<hr><p data-new><br></p>');
+      if (el) placeCaret(el);
+    },
+    insertImage(url, range) {
+      body.focus();
+      if (range) { const s = getSelection(); s.removeAllRanges(); s.addRange(range); }
+      const el = ed.insertBlock(`<p><img src="${esc(url)}" alt=""></p><p data-new><br></p>`);
+      if (el) placeCaret(el);
+      markDirty();
+    },
+    async imageUpload() {
+      const range = saveRange();
       const file = await pickImage();
       if (!file) return;
-      try {
-        const { url } = await attempt(() => uploadImage(file), 'Image ajoutée.');
-        restoreSelection(sel);
-        document.execCommand('insertHTML', false, `<img src="${esc(url)}" alt="">`);
-      } catch { /* toast déjà affiché */ }
-    } else document.execCommand(cmd, false, null);
+      try { const { url } = await attempt(() => uploadImage(file), 'Image ajoutée.'); ed.insertImage(url, range); } catch { /* toast */ }
+    },
+    async imageUrl() {
+      const range = saveRange();
+      const url = await promptBox('Image depuis un lien', 'Adresse de l\'image (doit commencer par https://)', 'https://', { submitLabel: 'Insérer' });
+      if (!url) return;
+      if (!/^https:\/\//i.test(url)) return toast('Le lien doit commencer par https://', true);
+      ed.insertImage(url, range);
+    },
+  };
+  const saveRange = () => { const s = getSelection(); return s.rangeCount && body.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null; };
+  editor = ed;
+
+  // --- Menu « / » ---
+  let slash = null; // { node, offset, items, sel, el }
+  const closeSlash = () => { if (slash && slash.el) slash.el.remove(); slash = null; };
+  const drawSlash = () => {
+    const s = getSelection();
+    if (!slash || !s.rangeCount || s.anchorNode !== slash.node || s.anchorOffset <= slash.offset || slash.node.data[slash.offset] !== '/') return closeSlash();
+    const q = slash.node.data.slice(slash.offset + 1, s.anchorOffset);
+    if (/\s/.test(q) || q.length > 20) return closeSlash();
+    slash.items = BLOCKS.filter(b => norm(`${b.label} ${b.kw}`).includes(norm(q)));
+    slash.sel = Math.min(slash.sel, Math.max(0, slash.items.length - 1));
+    if (!slash.el) {
+      slash.el = document.createElement('div');
+      slash.el.className = 'floating slash-menu';
+      slash.el.addEventListener('mousedown', e => e.preventDefault());
+      slash.el.addEventListener('click', e => { const it = e.target.closest('[data-i]'); if (it) chooseSlash(Number(it.dataset.i)); });
+      document.body.append(slash.el);
+    }
+    slash.el.innerHTML = slash.items.length
+      ? `<p class="slash-title">Insérer un bloc</p>${slash.items.map((b, i) => `<button type="button" class="slash-item ${i === slash.sel ? 'sel' : ''}" data-i="${i}"><span class="slash-ico">${b.ico}</span><span><strong>${b.label}</strong><small>${b.desc}</small></span></button>`).join('')}`
+      : '<p class="slash-title">Aucun bloc ne correspond</p>';
+    const r = s.getRangeAt(0).getBoundingClientRect();
+    floatAt(slash.el, r.width || r.height ? r : slash.node.parentElement.getBoundingClientRect());
+    $('.sel', slash.el)?.scrollIntoView({ block: 'nearest' });
+  };
+  const chooseSlash = i => {
+    const b = slash.items[i];
+    const s = getSelection();
+    // Efface « /recherche » avant d'insérer le bloc.
+    const r = document.createRange();
+    r.setStart(slash.node, slash.offset);
+    r.setEnd(slash.node, s.anchorNode === slash.node ? s.anchorOffset : slash.offset + 1);
+    r.deleteContents();
+    s.removeAllRanges(); s.addRange(r);
+    closeSlash();
+    body.focus();
+    Promise.resolve(b.run(ed)).finally(() => { markDirty(); updateFloating(); });
+  };
+
+  body.addEventListener('input', e => {
     markDirty();
-    updateToolbarState();
+    if (e.inputType === 'insertText' && e.data === '/') {
+      const s = getSelection();
+      if (s.anchorNode && s.anchorNode.nodeType === Node.TEXT_NODE) slash = { node: s.anchorNode, offset: s.anchorOffset - 1, sel: 0 };
+    }
+    if (slash) drawSlash();
   });
 
-  const updateToolbarState = () => {
-    for (const b of $$('button', toolbar)) {
-      const cmd = b.dataset.cmd;
-      if (['bold', 'italic', 'underline', 'strikeThrough', 'insertUnorderedList', 'insertOrderedList'].includes(cmd)) {
-        try { b.classList.toggle('on', document.queryCommandState(cmd)); } catch { /* ignoré */ }
+  body.addEventListener('keydown', e => {
+    if (slash && slash.items && slash.items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); slash.sel = (slash.sel + 1) % slash.items.length; return drawSlash(); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); slash.sel = (slash.sel - 1 + slash.items.length) % slash.items.length; return drawSlash(); }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return chooseSlash(slash.sel); }
+    }
+    if (slash && e.key === 'Escape') { e.preventDefault(); return closeSlash(); }
+    const s = getSelection();
+    // Entrée sur une ligne vide à la fin d'un encadré : on sort de l'encadré.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const p = closestEl(s.anchorNode, 'p', body);
+      const box = p && p.parentElement && p.parentElement.classList.contains('callout') ? p.parentElement : null;
+      if (box && !p.textContent.trim() && p === box.lastElementChild && box.children.length > 1) {
+        e.preventDefault();
+        p.remove();
+        const np = document.createElement('p');
+        np.innerHTML = '<br>';
+        box.after(np);
+        placeCaret(np);
+        return markDirty();
       }
     }
-  };
-  const onSel = () => {
-    if (!body.isConnected) return document.removeEventListener('selectionchange', onSel);
-    if (document.activeElement === body) updateToolbarState();
-  };
-  document.addEventListener('selectionchange', onSel);
+    // Tab dans un tableau : cellule suivante (une ligne est ajoutée à la fin).
+    if (e.key === 'Tab') {
+      const cell = closestEl(s.anchorNode, 'td, th', body);
+      if (!cell) return;
+      e.preventDefault();
+      const table = cell.closest('table');
+      let cells = $$('th, td', table);
+      const i = cells.indexOf(cell) + (e.shiftKey ? -1 : 1);
+      if (i >= cells.length) { tableOps.addRow(cells[cells.length - 1]); cells = $$('th, td', table); }
+      if (cells[i]) selectCell(cells[i]);
+    }
+  });
+  body.addEventListener('blur', () => setTimeout(() => { if (slash && !body.contains(document.activeElement)) closeSlash(); }, 150));
 
   // Collage : on nettoie le HTML pour éviter d'importer styles et scripts.
   body.addEventListener('paste', e => {
     const file = [...(e.clipboardData.files || [])].find(f => f.type.startsWith('image/'));
     e.preventDefault();
     if (file) {
-      attempt(() => uploadImage(file), 'Image ajoutée.').then(({ url }) => { document.execCommand('insertHTML', false, `<img src="${esc(url)}" alt="">`); markDirty(); }).catch(() => {});
+      const range = saveRange();
+      attempt(() => uploadImage(file), 'Image ajoutée.').then(({ url }) => ed.insertImage(url, range)).catch(() => {});
       return;
     }
     const html = e.clipboardData.getData('text/html');
@@ -1004,153 +1141,370 @@ function renderEditor(id, catParam) {
     const file = [...(e.dataTransfer.files || [])].find(f => f.type.startsWith('image/'));
     if (!file) return;
     e.preventDefault();
-    attempt(() => uploadImage(file), 'Image ajoutée.').then(({ url }) => { body.focus(); document.execCommand('insertHTML', false, `<img src="${esc(url)}" alt="">`); markDirty(); }).catch(() => {});
+    attempt(() => uploadImage(file), 'Image ajoutée.').then(({ url }) => ed.insertImage(url, null)).catch(() => {});
   });
 
-  // Suppression d'une image : clic pour la sélectionner puis Suppr.
+  // Clic sur une image : sélection (puis Suppr pour l'effacer).
   body.addEventListener('click', e => {
     $$('img.selected', body).forEach(i => i.classList.remove('selected'));
     if (e.target.tagName === 'IMG') {
       e.target.classList.add('selected');
       const r = document.createRange(); r.selectNode(e.target);
-      const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
     }
   });
-
-  // Ctrl+S pour enregistrer
-  app.onkeydown = e => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(draft.published).catch(() => {}); }
-  };
 }
 
-function saveSelection() {
-  const s = window.getSelection();
-  return s.rangeCount ? s.getRangeAt(0).cloneRange() : null;
-}
-function restoreSelection(range) {
-  $('#ed-body').focus();
-  if (!range) return;
-  const s = window.getSelection(); s.removeAllRanges(); s.addRange(range);
-}
-
-// ---------------------------------------------------------------------------
-// Administration — apparence
-// ---------------------------------------------------------------------------
-
-const DEFAULT_COLORS = { accent: '#e11d48', background: '#0b0b10', surface: '#15151d', text: '#ececf1' };
-const COLOR_LABELS = {
-  accent: ['Couleur principale', 'Boutons, liens, numéros'],
-  background: ['Fond', 'Arrière-plan du site'],
-  surface: ['Cartes', 'Fond des articles et panneaux'],
-  text: ['Texte', 'Couleur du texte'],
+// --- Tableaux : ajout / suppression de lignes et colonnes ---
+const tableOps = {
+  addRow(cell) {
+    const tr = cell.closest('tr');
+    const table = tr.closest('table');
+    const n = tr.children.length;
+    const row = document.createElement('tr');
+    row.innerHTML = '<td><br></td>'.repeat(n);
+    if (tr.parentElement.tagName === 'THEAD') { let tb = $('tbody', table); if (!tb) { tb = document.createElement('tbody'); table.append(tb); } tb.prepend(row); }
+    else tr.after(row);
+    return row;
+  },
+  addCol(cell) {
+    const i = [...cell.parentElement.children].indexOf(cell);
+    $$('tr', cell.closest('table')).forEach(tr => {
+      const c = document.createElement(tr.parentElement.tagName === 'THEAD' ? 'th' : 'td');
+      c.innerHTML = tr.parentElement.tagName === 'THEAD' ? 'Colonne' : '<br>';
+      if (tr.children[i]) tr.children[i].after(c); else tr.append(c);
+    });
+  },
+  delRow(cell) {
+    const tr = cell.closest('tr');
+    if (tr.parentElement.tagName === 'THEAD') return toast('La ligne d\'en-tête ne peut pas être supprimée.', true);
+    if ($$('tbody tr', tr.closest('table')).length <= 1) return toast('Le tableau doit garder au moins une ligne.', true);
+    tr.remove();
+  },
+  delCol(cell) {
+    const i = [...cell.parentElement.children].indexOf(cell);
+    const table = cell.closest('table');
+    if (cell.parentElement.children.length <= 1) return toast('Le tableau doit garder au moins une colonne.', true);
+    $$('tr', table).forEach(tr => tr.children[i] && tr.children[i].remove());
+  },
+  delTable(cell) { const t = cell.closest('table'); const p = document.createElement('p'); p.innerHTML = '<br>'; t.replaceWith(p); placeCaret(p); },
 };
 
-function renderAppearance() {
-  document.title = `Apparence — ${state.data.settings.siteName}`;
+// --- Barres flottantes : mise en forme du texte sélectionné, outils de tableau ---
+function toggleHighlight() {
+  const s = getSelection();
+  if (!s.rangeCount) return;
+  const r = s.getRangeAt(0);
+  const existing = closestEl(r.commonAncestorContainer, 'span.hl', editor.body);
+  if (existing) { existing.replaceWith(...existing.childNodes); return; }
+  const blockOf = n => closestEl(n, 'p, li, h2, h3, td, th, blockquote', editor.body);
+  if (blockOf(r.startContainer) !== blockOf(r.endContainer)) return toast('Sélectionnez du texte dans un seul paragraphe.', true);
+  const span = document.createElement('span');
+  span.className = 'hl';
+  span.append(r.extractContents());
+  $$('span.hl', span).forEach(x => x.replaceWith(...x.childNodes));
+  r.insertNode(span);
+  s.selectAllChildren(span);
+}
+
+async function editLink() {
+  const s = getSelection();
+  const a = closestEl(s.anchorNode, 'a', editor.body);
+  if (a) { document.execCommand('unlink'); return; }
+  const range = s.getRangeAt(0).cloneRange();
+  const url = await promptBox('Insérer un lien', 'Adresse du lien', 'https://', { submitLabel: 'Insérer' });
+  if (!url) return;
+  if (!/^(https?:|mailto:|#)/i.test(url)) return toast('Lien invalide : il doit commencer par https://', true);
+  editor.body.focus();
+  s.removeAllRanges(); s.addRange(range);
+  document.execCommand('createLink', false, url);
+}
+
+function floatingBar(cls, html, onAction) {
+  let el = $(`.${cls}`);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = `floating ${cls}`;
+    el.innerHTML = html;
+    el.addEventListener('mousedown', e => e.preventDefault()); // garde la sélection
+    el.addEventListener('click', async e => {
+      const b = e.target.closest('[data-a]');
+      if (!b || !editor) return;
+      await onAction(b.dataset.a);
+      editor.markDirty();
+      updateFloating();
+    });
+    document.body.append(el);
+  }
+  return el;
+}
+
+function updateFloating() {
+  if (!editor || !editor.body.isConnected) return;
+  const s = getSelection();
+  const inBody = s.rangeCount > 0 && editor.body.contains(s.anchorNode);
+
+  // Bulle de mise en forme sur une sélection de texte.
+  const hasText = inBody && !s.isCollapsed && s.toString().trim();
+  if (hasText) {
+    const bubble = floatingBar('bubble', `
+      <button type="button" data-a="bold" title="Gras (Ctrl+B)"><b>G</b></button>
+      <button type="button" data-a="italic" title="Italique (Ctrl+I)"><i>I</i></button>
+      <button type="button" data-a="hl" title="Mettre en avant en rouge" class="bubble-red">Rouge</button>
+      <button type="button" data-a="link" title="Lien">🔗 Lien</button>
+      <span class="sep"></span>
+      <button type="button" data-a="h2" title="Transformer en titre">Titre</button>
+      <button type="button" data-a="clear" title="Effacer la mise en forme">⌫</button>`, async a => {
+      if (a === 'bold' || a === 'italic') document.execCommand(a);
+      if (a === 'hl') toggleHighlight();
+      if (a === 'link') await editLink();
+      if (a === 'h2') document.execCommand('formatBlock', false, 'h2');
+      if (a === 'clear') { document.execCommand('removeFormat'); const hl = closestEl(getSelection().anchorNode, 'span.hl', editor.body); if (hl) hl.replaceWith(...hl.childNodes); }
+    });
+    $('[data-a="bold"]', bubble).classList.toggle('on', document.queryCommandState('bold'));
+    $('[data-a="hl"]', bubble).classList.toggle('on', !!closestEl(s.anchorNode, 'span.hl', editor.body));
+    $('[data-a="link"]', bubble).innerHTML = closestEl(s.anchorNode, 'a', editor.body) ? '🔗 Retirer' : '🔗 Lien';
+    floatAt(bubble, s.getRangeAt(0).getBoundingClientRect(), { above: true });
+  } else $('.bubble')?.remove();
+
+  // Outils de tableau quand le curseur est dans une cellule.
+  const cell = inBody && closestEl(s.anchorNode, 'td, th', editor.body);
+  if (cell) {
+    const bar = floatingBar('table-tools', `
+      <button type="button" data-a="addRow">+ Ligne</button><button type="button" data-a="addCol">+ Colonne</button>
+      <button type="button" data-a="delRow">− Ligne</button><button type="button" data-a="delCol">− Colonne</button>
+      <button type="button" data-a="delTable" class="danger">Supprimer le tableau</button>`, a => {
+      const c = closestEl(getSelection().anchorNode, 'td, th', editor.body);
+      if (c) tableOps[a](c);
+    });
+    // Sous le tableau, pour ne pas chevaucher la bulle de mise en forme.
+    floatAt(bar, cell.closest('table').getBoundingClientRect());
+  } else $('.table-tools')?.remove();
+}
+document.addEventListener('selectionchange', updateFloating);
+window.addEventListener('scroll', () => { if (editor) updateFloating(); }, { passive: true });
+
+// ---------------------------------------------------------------------------
+// Connexion Discord
+// ---------------------------------------------------------------------------
+
+const DISCORD_LOGO = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20.3 4.4A19.8 19.8 0 0 0 15.4 3l-.6 1.3a18.4 18.4 0 0 0-5.6 0L8.6 3a19.7 19.7 0 0 0-4.9 1.4C.6 9-.3 13.6.1 18.1a19.9 19.9 0 0 0 6 3l1.3-2.1a12.9 12.9 0 0 1-2-1l.5-.4a14.2 14.2 0 0 0 12.2 0l.5.4c-.6.4-1.3.7-2 1l1.3 2.1a19.8 19.8 0 0 0 6-3c.5-5.2-.9-9.8-3.6-13.7ZM8 15.4c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4Z"/></svg>';
+
+function renderLogin(params) {
+  const err = params.get('erreur');
+  const id = params.get('id') || '';
+  const messages = {
+    refuse: `<p><strong>Accès refusé.</strong> Votre compte Discord n'est pas autorisé. Votre demande a été transmise au propriétaire.</p>
+      <p>Votre ID Discord : <code class="copy-id" title="Cliquer pour copier">${esc(id)}</code></p>`,
+    config: '<p>La connexion Discord n\'est pas encore configurée sur le serveur.</p>',
+    discord: '<p>Discord a renvoyé une erreur. Réessayez dans quelques instants.</p>',
+    annule: '<p>Connexion annulée ou expirée. Réessayez.</p>',
+  };
+  main.innerHTML = `<div class="card auth">
+    <h1>Connexion staff</h1>
+    <p class="muted">Réservé aux personnes autorisées par le propriétaire. Le règlement reste consultable par tous, sans connexion.</p>
+    ${err && messages[err] ? `<div class="auth-alert">${messages[err]}</div>` : ''}
+    ${state.data.discordReady
+      ? `<a class="btn btn-discord btn-lg" href="/auth/discord">${DISCORD_LOGO} Se connecter avec Discord</a>`
+      : '<p class="error-msg">Connexion Discord non configurée sur le serveur (variables DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET et OWNER_DISCORD_ID).</p>'}
+    <ol class="auth-steps">
+      <li>Cliquez sur <strong>« Se connecter avec Discord »</strong> et acceptez.</li>
+      <li>Si vous êtes autorisé, le <strong>mode édition</strong> s'ouvre directement.</li>
+      <li>Sinon, votre demande est envoyée au propriétaire, qui pourra vous donner l'accès.</li>
+    </ol>
+  </div>`;
+  const copy = $('.copy-id');
+  if (copy) copy.onclick = () => navigator.clipboard.writeText(id).then(() => toast('ID copié.'));
+}
+
+// ---------------------------------------------------------------------------
+// Administration : en-tête commun
+// ---------------------------------------------------------------------------
+
+function adminHeader(active) {
+  const tab = (href, key, label) => `<a href="${href}" class="${active === key ? 'active' : ''}">${label}</a>`;
+  return `<div class="admin-head"><h1>Administration</h1></div>
+    <nav class="tabs">${can('edit') ? tab('#/admin/historique', 'history', 'Historique') : ''}${can('settings') ? tab('#/admin/reglages', 'settings', 'Réglages du site') : ''}${me().owner ? tab('#/admin/acces', 'access', 'Accès du staff') : ''}</nav>`;
+}
+
+// ---------------------------------------------------------------------------
+// Administration : réglages (nom, logo, menu du haut)
+// ---------------------------------------------------------------------------
+
+function renderSettings() {
+  document.title = `Réglages — ${state.data.settings.siteName}`;
   const s = structuredClone(state.data.settings);
-  app.innerHTML = `${adminHeader('look')}
-    <div class="grid-2">
-      <form class="card" id="look-form">
+  const pageOptions = `<option value="">Lier à une page…</option>${state.data.pages.map(p => `<option value="#/p/${p.id}">${esc(p.draft.icon)} ${esc(p.draft.title)}</option>`).join('')}`;
+
+  main.innerHTML = `${adminHeader('settings')}
+    <form id="settings-form">
+      <div class="card">
+        <h2 class="card-title">Identité du site</h2>
         <label class="field"><span>Nom du serveur</span><input type="text" name="siteName" maxlength="60" value="${esc(s.siteName)}" required></label>
-        <label class="field"><span>Sous-titre (page d'accueil)</span><input type="text" name="tagline" maxlength="160" value="${esc(s.tagline)}"></label>
-        <span class="hint" style="display:block;font-weight:600;margin-bottom:8px">Logo</span>
+        <span class="field-label">Logo</span>
         <div class="logo-box">
           <div class="logo-preview" id="logo-prev"></div>
           <div><button type="button" class="btn btn-sm" id="logo-up">Importer un logo</button>
-          <button type="button" class="btn btn-sm btn-danger" id="logo-rm">Retirer</button>
-          <p class="hint" style="margin:6px 0 0">PNG transparent conseillé, 5 Mo max.</p></div>
+            <button type="button" class="btn btn-sm btn-danger" id="logo-rm">Retirer</button>
+            <p class="muted small">PNG transparent conseillé, 5 Mo max.</p></div>
         </div>
-        <div style="display:flex;gap:8px;margin-top:20px">
-          <button class="btn btn-primary">Enregistrer</button>
-          <button type="button" class="btn" id="look-reset">Couleurs par défaut</button>
-        </div>
-      </form>
-      <div class="card">
-        <span class="hint" style="display:block;font-weight:600;margin-bottom:14px">Couleurs — aperçu en direct</span>
-        ${Object.entries(COLOR_LABELS).map(([k, [l, d]]) => `<div class="color-row">
-          <input type="color" data-color="${k}" value="${s.colors[k]}" aria-label="${l}">
-          <span class="lbl"><strong>${l}</strong><small>${d}</small></span><code data-code="${k}">${s.colors[k]}</code></div>`).join('')}
-        <p class="hint">Les couleurs s'appliquent immédiatement à cette page pour prévisualiser ; cliquez sur « Enregistrer » pour les appliquer à tous.</p>
+        <label class="field"><span>Petit texte en bas du menu de gauche</span><input type="text" name="footerNote" maxlength="80" value="${esc(s.footerNote)}" placeholder="ex. Propulsé par RedSide"></label>
       </div>
-    </div>`;
+      <div class="card">
+        <h2 class="card-title">Liens du menu du haut</h2>
+        <p class="muted small">Un lien avec des <strong>sous-liens</strong> devient un menu déroulant (▾). Laissez le lien principal vide si vous voulez seulement le menu. Pour pointer vers une page du règlement, utilisez « Lier à une page… ». Le lien <code>#/connexion</code> ouvre la connexion staff.</p>
+        <div id="nav-editor"></div>
+        <button type="button" class="btn btn-sm" id="nav-add">${ICON.plus} Ajouter un lien</button>
+      </div>
+      <div class="sticky-actions"><button class="btn btn-accent">Enregistrer les réglages</button></div>
+    </form>`;
 
-  const drawLogo = () => { $('#logo-prev').innerHTML = s.logo ? `<img src="${esc(s.logo)}" alt="">` : '<span class="hint">Aucun</span>'; $('#logo-rm').hidden = !s.logo; };
+  const drawLogo = () => { $('#logo-prev').innerHTML = s.logo ? `<img src="${esc(s.logo)}" alt="">` : '<span class="muted small">Aucun</span>'; $('#logo-rm').hidden = !s.logo; };
   drawLogo();
-  const preview = () => applyTheme(s);
-  let saved = false;
-
-  $$('[data-color]').forEach(inp => inp.addEventListener('input', () => {
-    s.colors[inp.dataset.color] = inp.value;
-    $(`[data-code="${inp.dataset.color}"]`).textContent = inp.value;
-    preview();
-  }));
-  $('#look-reset').onclick = () => {
-    Object.assign(s.colors, DEFAULT_COLORS);
-    $$('[data-color]').forEach(inp => { inp.value = s.colors[inp.dataset.color]; $(`[data-code="${inp.dataset.color}"]`).textContent = inp.value; });
-    preview();
-  };
   $('#logo-up').onclick = async () => {
     const file = await pickImage();
     if (!file) return;
-    try { s.logo = (await attempt(() => uploadImage(file))).url; drawLogo(); preview(); } catch { /* toast */ }
+    try { s.logo = (await attempt(() => uploadImage(file))).url; drawLogo(); } catch { /* toast */ }
   };
-  $('#logo-rm').onclick = () => { s.logo = null; drawLogo(); preview(); };
-  $('#look-form').onsubmit = async e => {
+  $('#logo-rm').onclick = () => { s.logo = null; drawLogo(); };
+
+  const row = (n, i, j = null) => {
+    const key = j === null ? `data-i="${i}"` : `data-i="${i}" data-j="${j}"`;
+    return `<div class="nav-row ${j === null ? '' : 'is-child'}">
+      <input type="text" ${key} data-f="label" value="${esc(n.label)}" placeholder="Texte" maxlength="${j === null ? 40 : 60}">
+      <input type="text" ${key} data-f="url" value="${esc(n.url)}" placeholder="${j === null ? 'Lien (vide = menu déroulant seulement)' : 'https://… ou #/p/…'}">
+      <select ${key} data-pick>${pageOptions}</select>
+      <span class="nav-row-tools">
+        <button type="button" class="icon-btn" ${key} data-move="-1" title="Monter">${ICON.up}</button>
+        <button type="button" class="icon-btn" ${key} data-move="1" title="Descendre">${ICON.down}</button>
+        <button type="button" class="icon-btn danger" ${key} data-del title="Supprimer">${ICON.trash}</button>
+      </span></div>`;
+  };
+  const drawNav = () => {
+    $('#nav-editor').innerHTML = s.nav.map((n, i) => `<div class="nav-group">${row(n, i)}
+      ${n.children.map((c, j) => row(c, i, j)).join('')}
+      <button type="button" class="linkish small" data-add-child="${i}">${ICON.plus} Ajouter un sous-lien</button></div>`).join('') || '<p class="muted small">Aucun lien.</p>';
+  };
+  drawNav();
+
+  const target = el => { const i = Number(el.dataset.i); return el.dataset.j === undefined ? { list: s.nav, k: i } : { list: s.nav[i].children, k: Number(el.dataset.j) }; };
+  const navEl = $('#nav-editor');
+  navEl.addEventListener('input', e => {
+    const el = e.target;
+    if (!el.dataset.f) return;
+    const { list, k } = target(el);
+    list[k][el.dataset.f] = el.value;
+  });
+  navEl.addEventListener('change', e => {
+    const el = e.target;
+    if (!('pick' in el.dataset) || !el.value) return;
+    const { list, k } = target(el);
+    list[k].url = el.value;
+    if (!list[k].label || /^(Lien|Nouveau lien)$/.test(list[k].label)) list[k].label = el.selectedOptions[0].textContent.replace(/^\S+\s/, '');
+    drawNav();
+  });
+  navEl.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.addChild !== undefined) { s.nav[Number(b.dataset.addChild)].children.push({ label: 'Nouveau lien', url: '' }); return drawNav(); }
+    const { list, k } = target(b);
+    if ('del' in b.dataset) list.splice(k, 1);
+    if (b.dataset.move) { const j = k + Number(b.dataset.move); if (j >= 0 && j < list.length) [list[k], list[j]] = [list[j], list[k]]; }
+    drawNav();
+  });
+  $('#nav-add').onclick = () => { s.nav.push({ label: 'Nouveau lien', url: '', children: [] }); drawNav(); };
+
+  $('#settings-form').onsubmit = async e => {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      await attempt(() => api('PUT', '/api/settings', { siteName: f.get('siteName'), tagline: f.get('tagline'), logo: s.logo, colors: s.colors }), 'Apparence enregistrée.');
-      saved = true;
+      await attempt(() => api('PUT', '/api/settings', { siteName: f.get('siteName'), footerNote: f.get('footerNote'), logo: s.logo, nav: s.nav }), 'Réglages enregistrés.');
       await loadData();
       render();
     } catch { /* toast */ }
   };
-  // Quitter sans enregistrer : on remet le thème réellement en vigueur.
-  const restore = () => { if (!saved) applyTheme(); window.removeEventListener('hashchange', restore); };
-  window.addEventListener('hashchange', restore);
 }
 
 // ---------------------------------------------------------------------------
-// Administration — accès (propriétaire uniquement)
+// Administration : historique des modifications
 // ---------------------------------------------------------------------------
+
+const ACTIONS = {
+  'page.create': 'a créé la page', 'page.save': 'a modifié', 'page.publish': 'a publié', 'page.unpublish': 'a dépublié',
+  'page.delete': 'a supprimé la page', 'page.move': 'a déplacé', 'cat.create': 'a créé la catégorie',
+  'cat.rename': 'a renommé la catégorie', 'cat.delete': 'a supprimé la catégorie', settings: 'a modifié les réglages du site',
+};
+
+async function renderHistory(params) {
+  document.title = `Historique — ${state.data.settings.siteName}`;
+  main.innerHTML = `${adminHeader('history')}<div class="loading">Chargement…</div>`;
+  let list;
+  try { list = await api('GET', '/api/history'); } catch (e) { toast(e.message, true); return; }
+  if (!location.hash.startsWith('#/admin/historique')) return;
+  const only = params.get('page');
+  if (only) list = list.filter(h => h.target === only);
+  const exists = id => state.data.pages.some(p => p.id === id);
+  let lastDay = '';
+  const rows = list.map(h => {
+    const day = fmtDate(h.at);
+    const head = day !== lastDay ? `<li class="hist-day">${day}</li>` : '';
+    lastDay = day;
+    const isPage = h.action.startsWith('page.') && h.action !== 'page.delete' && exists(h.target);
+    return `${head}<li class="hist-row"><span class="hist-time">${fmtTime(h.at)}</span>
+      <span><strong>${esc(h.by)}</strong> ${ACTIONS[h.action] || h.action} ${h.title && h.action !== 'settings' ? (isPage ? `<a href="#/p/${h.target}">« ${esc(h.title)} »</a>` : `« ${esc(h.title)} »`) : ''}</span></li>`;
+  }).join('');
+  const title = only ? (state.data.pages.find(p => p.id === only) || { draft: { title: 'page supprimée' } }).draft.title : '';
+  main.innerHTML = `${adminHeader('history')}
+    ${only ? `<p class="muted">Modifications de la page <strong>« ${esc(title)} »</strong> · <a href="#/admin/historique">Voir tout l'historique</a></p>` : '<p class="muted">Qui a modifié quoi, et quand (300 dernières actions).</p>'}
+    ${list.length ? `<ul class="hist card">${rows}</ul>` : '<div class="empty">Aucune modification enregistrée pour le moment.</div>'}`;
+}
+
+// ---------------------------------------------------------------------------
+// Administration : accès du staff (propriétaire uniquement)
+// ---------------------------------------------------------------------------
+
+const PERM_LABELS = {
+  edit: ['Modifier', 'Créer, modifier, déplacer et supprimer les pages et catégories'],
+  publish: ['Publier', 'Rendre les pages visibles (ou les cacher) pour les joueurs'],
+  settings: ['Réglages', 'Nom du serveur, logo, liens du menu du haut'],
+};
 
 async function renderAccess() {
   document.title = `Accès — ${state.data.settings.siteName}`;
-  app.innerHTML = `${adminHeader('access')}<div class="loading">Chargement…</div>`;
+  main.innerHTML = `${adminHeader('access')}<div class="loading">Chargement…</div>`;
   let data;
   try { data = await api('GET', '/api/access'); } catch (e) { toast(e.message, true); return; }
   if (!location.hash.startsWith('#/admin/acces')) return;
-  const date = t => new Date(t).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
   const permBoxes = (perms, attrs = '') => Object.entries(PERM_LABELS).map(([k, [label, desc]]) =>
     `<label class="toggle" title="${esc(desc)}"><input type="checkbox" data-perm="${k}" ${attrs} ${perms[k] ? 'checked' : ''}> ${label}</label>`).join('');
   const who = u => `<img class="avatar-img" src="${avatarUrl(u)}" alt="">
-    <span class="who"><strong>${esc(u.username || u.note || 'Pas encore connecté')}</strong><small>ID ${esc(u.id)}${u.note && u.username !== u.note ? ` · ${esc(u.note)}` : ''}${u.addedAt ? ` · ajouté le ${date(u.addedAt)}` : u.at ? ` · demande du ${date(u.at)}` : ''}</small></span>`;
+    <span class="who"><strong>${esc(u.username || u.note || 'Pas encore connecté')}</strong><small>ID ${esc(u.id)}${u.note && u.username !== u.note ? ` · ${esc(u.note)}` : ''}${u.addedAt ? ` · ajouté le ${fmtDate(u.addedAt)}` : u.at ? ` · demande du ${fmtDate(u.at)}` : ''}</small></span>`;
 
-  app.innerHTML = `${adminHeader('access')}
-    <p class="hint" style="margin-top:-8px">Vous êtes le propriétaire : vous avez tous les accès, et vous seul décidez qui peut se connecter et ce que chacun peut faire. Le règlement publié reste lisible par tout le monde sans connexion.</p>
-    ${data.requests.length ? `<div class="card" style="margin-bottom:24px">
-      <span class="hint" style="display:block;font-weight:600;margin-bottom:8px">Demandes d'accès (${data.requests.length})</span>
+  main.innerHTML = `${adminHeader('access')}
+    <p class="muted">Vous êtes le propriétaire : vous avez tous les accès, et vous seul décidez qui peut se connecter et ce que chacun peut faire.</p>
+    ${data.requests.length ? `<div class="card">
+      <h2 class="card-title">Demandes d'accès (${data.requests.length})</h2>
       <ul class="user-list">${data.requests.map(r => `<li>${who(r)}
-        <button class="btn btn-sm btn-primary" data-approve="${r.id}">Autoriser</button>
+        <button class="btn btn-sm btn-accent" data-approve="${r.id}">Autoriser</button>
         <button class="icon-btn danger" data-ignore="${r.id}" title="Ignorer la demande">${ICON.trash}</button></li>`).join('')}</ul>
-      <p class="hint">Ces personnes ont essayé de se connecter. « Autoriser » leur donne l'accès « Modifier le règlement » ; ajustez ensuite si besoin.</p>
+      <p class="muted small">Ces personnes ont essayé de se connecter. « Autoriser » leur donne l'accès « Modifier » ; ajustez ensuite si besoin.</p>
     </div>` : ''}
     <div class="grid-2">
       <div class="card">
-        <span class="hint" style="display:block;font-weight:600;margin-bottom:8px">Personnes autorisées (${data.access.length})</span>
+        <h2 class="card-title">Personnes autorisées (${data.access.length})</h2>
         ${data.access.length ? `<ul class="user-list">${data.access.map(a => `<li class="access-row">
           <div class="access-top">${who(a)}
             <button class="icon-btn danger" data-remove="${a.id}" data-name="${esc(a.username || a.note || a.id)}" title="Retirer l'accès">${ICON.trash}</button></div>
           <div class="perms">${permBoxes(a.perms, `data-for="${a.id}"`)}</div></li>`).join('')}</ul>`
-          : '<p class="hint">Personne pour le moment. Ajoutez quelqu\'un avec son ID Discord, ou attendez qu\'il tente de se connecter.</p>'}
+          : '<p class="muted small">Personne pour le moment. Ajoutez quelqu\'un avec son ID Discord, ou attendez qu\'il tente de se connecter.</p>'}
       </div>
       <form class="card" id="add-access">
-        <span class="hint" style="display:block;font-weight:600;margin-bottom:14px">Donner un accès</span>
+        <h2 class="card-title">Donner un accès</h2>
         <label class="field"><span>ID Discord</span><input type="text" name="id" required pattern="\\d{17,20}" inputmode="numeric" placeholder="ex. 123456789012345678" autocomplete="off"></label>
         <label class="field"><span>Note (facultatif)</span><input type="text" name="note" maxlength="60" placeholder="ex. Modérateur"></label>
         <div class="perms" style="margin-bottom:16px">${permBoxes({ edit: true })}</div>
-        <button class="btn btn-primary">${ICON.plus} Donner l'accès</button>
-        <p class="hint" style="margin-top:12px">Pour copier un ID : Discord › Paramètres › Avancés › Mode développeur, puis clic droit sur la personne › « Copier l'identifiant ».${data.botLookup ? '' : ' Ajoutez le token du bot dans config.json pour afficher automatiquement pseudo et avatar.'}</p>
+        <button class="btn btn-accent">${ICON.plus} Donner l'accès</button>
+        <p class="muted small">Pour copier un ID : Discord › Paramètres › Avancés › Mode développeur, puis clic droit sur la personne › « Copier l'identifiant ».</p>
       </form>
     </div>`;
 
@@ -1165,7 +1519,7 @@ async function renderAccess() {
     try { await attempt(() => api('PUT', `/api/access/${box.dataset.for}`, { perms: readPerms(box.closest('.access-row')) }), 'Accès mis à jour.'); }
     catch { box.checked = !box.checked; }
   });
-  app.onclick = async e => {
+  main.onclick = async e => {
     const t = e.target.closest('[data-approve],[data-ignore],[data-remove]');
     if (!t) return;
     try {
@@ -1184,17 +1538,11 @@ async function renderAccess() {
 // Démarrage
 // ---------------------------------------------------------------------------
 
-// Bouton « remonter en haut », affiché après un peu de défilement.
-const toTop = Object.assign(document.createElement('button'), { className: 'to-top', title: 'Remonter en haut', innerHTML: ICON.up });
-toTop.onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
-document.body.append(toTop);
-window.addEventListener('scroll', () => toTop.classList.toggle('show', window.scrollY > 600), { passive: true });
-
 (async () => {
   try {
     await loadData();
     render();
   } catch (e) {
-    app.innerHTML = `<div class="empty">Impossible de charger le règlement : ${esc(e.message)}</div>`;
+    main.innerHTML = `<div class="empty">Impossible de charger le règlement : ${esc(e.message)}</div>`;
   }
 })();
