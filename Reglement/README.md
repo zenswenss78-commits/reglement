@@ -1,4 +1,4 @@
-# RedSide V5 — Règlement
+# BLACKLIFE RP — Règlement
 
 Site de règlement façon documentation (style GitBook, thème sombre), avec un **mode édition** pour créer et modifier les pages sans toucher au code.
 Aucune dépendance à installer : il suffit de **Node.js 18 ou plus**.
@@ -98,8 +98,10 @@ Connectez-vous (lien « Se connecter » en haut), puis cliquez sur **Mode éditi
 - **Glisser-déposer** les pages dans le menu : en haut / en bas d'une page pour la placer avant / après,
   **au milieu** pour en faire une sous-page, sur le titre d'une catégorie pour l'y déplacer.
 - **Sur la page** : cliquez sur l'icône pour la changer, puis modifiez le titre, la description et la catégorie.
-- **Contenu** : tapez **`/`** pour insérer un titre, une liste, une image (envoi ou lien), un encadré
-  (info / attention / interdit), un tableau, un séparateur ou une citation.
+- **Contenu** : utilisez la **barre d'outils** sous les boutons Enregistrer / Publier, ou tapez **`/`**,
+  pour insérer un titre, une liste, une image, un encadré (info / attention / interdit), un tableau ou un séparateur.
+- **Images** : bouton **🖼️ Image** (depuis l'ordinateur, 5 Mo max), **🔗 Image (lien)**, ou glissez / collez une image dans le texte.
+  Cliquez sur une image pour choisir sa taille (**Petite / Moyenne / Pleine largeur**) ou la supprimer.
   Sélectionnez du texte pour le mettre en **gras**, en **rouge** ou en lien.
   Dans un tableau, `Tab` passe à la cellule suivante et une barre permet d'ajouter / retirer lignes et colonnes.
 - **Enregistrer** garde un brouillon (invisible des joueurs). **Publier** rend la version actuelle visible par tous.

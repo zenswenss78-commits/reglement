@@ -1,4 +1,4 @@
-/* RedSide V5 — règlement façon documentation (thème sombre) */
+/* BLACKLIFE RP — règlement façon documentation (thème sombre) */
 :root {
   --bg: #1c1a1a;          /* fond principal */
   --bg-side: #191717;     /* sidebar et barre du haut */
@@ -18,7 +18,8 @@
 
   --top-h: 60px;
   --side-w: 280px;
-  --toc-w: 232px;
+  --toc-w: 240px;
+  --doc-w: 860px;         /* largeur du texte */
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 12px 32px rgb(0 0 0 / .45);
@@ -50,7 +51,7 @@ kbd {
   background: color-mix(in srgb, var(--bg-side) 92%, transparent); backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
-.topbar-inner { height: 100%; max-width: 1480px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 14px; }
+.topbar-inner { height: 100%; padding: 0 20px; display: flex; align-items: center; gap: 14px; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 800; font-size: 16px; white-space: nowrap; }
 .brand:hover { text-decoration: none; }
 .brand-logo { width: 32px; height: 32px; object-fit: contain; border-radius: 7px; }
@@ -94,12 +95,11 @@ kbd {
 .avatar-btn img { width: 100%; height: 100%; display: block; }
 .icon-btn.burger { display: none; }
 
-/* ---------- Structure 3 colonnes ---------- */
-.layout {
-  max-width: 1480px; margin: 0 auto;
-  display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) var(--toc-w); align-items: start;
-}
-.main { min-width: 0; padding: 40px 48px 96px; }
+/* ---------- Structure : sidebar collée à gauche, contenu centré, sommaire à droite ---------- */
+.layout { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); align-items: start; }
+body.has-toc .layout { grid-template-columns: var(--side-w) minmax(0, 1fr) var(--toc-w); }
+body:not(.has-toc) .toc { display: none; }
+.main { min-width: 0; padding: 40px clamp(20px, 4vw, 56px) 96px; }
 .scrim { display: none; }
 
 /* ---------- Sidebar gauche ---------- */
@@ -164,7 +164,7 @@ li.dragging > .side-item { opacity: .4; }
 .drop-cat { outline: 1px dashed var(--accent); background: var(--accent-soft); }
 
 /* ---------- Contenu d'une page ---------- */
-.doc { max-width: 780px; margin: 0 auto; }
+.doc { max-width: var(--doc-w); margin: 0 auto; }
 .doc-top { display: flex; align-items: center; gap: 12px; min-height: 32px; margin-bottom: 10px; }
 .doc-cat { flex: 1; color: var(--accent); font-size: 12.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
 .doc-title { display: flex; align-items: center; gap: 14px; margin: 0 0 10px; font-size: clamp(30px, 4.2vw, 40px); line-height: 1.15; font-weight: 800; letter-spacing: -.02em; }
@@ -185,6 +185,9 @@ li.dragging > .side-item { opacity: .4; }
 .prose blockquote { margin: 0 0 1em; padding: 4px 18px; border-left: 3px solid var(--border); color: var(--muted); }
 .prose hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
 .prose img { display: block; width: 100%; height: auto; border-radius: var(--radius); margin: 1.2em 0; border: 1px solid var(--border); }
+.prose img.img-md { width: auto; max-width: min(100%, 520px); margin-left: auto; margin-right: auto; }
+.prose img.img-sm { width: auto; max-width: min(100%, 280px); margin-left: auto; margin-right: auto; }
+.prose p:has(> img:only-child) { margin: 0; }
 .prose code { font-size: .9em; padding: 2px 6px; border-radius: 5px; background: var(--surface); border: 1px solid var(--border); }
 .prose a { text-decoration: underline; text-underline-offset: 3px; }
 .prose mark { background: rgb(245 176 65 / .3); color: inherit; border-radius: 3px; }
@@ -285,13 +288,24 @@ label.field > span, .field-label { display: block; font-size: 13px; font-weight:
 
 /* ---------- Mode édition ---------- */
 .edit-bar {
-  position: sticky; top: calc(var(--top-h) + 10px); z-index: 20; max-width: 780px; margin: -20px auto 26px;
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px 8px 14px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(8px);
+  position: sticky; top: calc(var(--top-h) + 10px); z-index: 20; max-width: var(--doc-w); margin: -20px auto 26px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent); backdrop-filter: blur(8px);
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
 }
-.edit-status { display: flex; align-items: center; gap: 10px; font-size: 13px; min-width: 0; }
-.edit-note { max-width: 780px; margin: -12px auto 20px; font-size: 13px; color: var(--muted); }
+.edit-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; }
+.edit-row > .btn, .edit-row > .nav-dd { flex-shrink: 0; }
+.edit-status { flex: 1; display: flex; align-items: center; gap: 10px; font-size: 13px; min-width: 0; }
+.edit-status .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edit-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 5px 8px; border-top: 1px solid var(--border); }
+.edit-tools button {
+  height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: none; color: var(--text);
+  cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; flex-shrink: 0;
+}
+.edit-tools button:hover { background: var(--surface-2); }
+.edit-tools .tool-main { background: var(--accent-soft); color: var(--accent); }
+.edit-tools .tool-main:hover { background: rgb(229 72 77 / .22); }
+.edit-tools .sep { width: 1px; height: 18px; margin: 0 4px; background: var(--border); flex-shrink: 0; }
+.edit-note { max-width: var(--doc-w); margin: -12px auto 20px; font-size: 13px; color: var(--muted); }
 .cat-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
 .cat-pick select {
   width: auto; padding: 4px 8px; border-color: transparent; background: none; color: var(--accent);
@@ -313,14 +327,18 @@ label.field > span, .field-label { display: block; font-size: 13px; font-weight:
 .ed-help { margin: 18px 0 0; padding-top: 14px; border-top: 1px dashed var(--border); font-size: 13px; color: var(--muted); }
 .ed-help .hl { color: var(--accent); font-weight: 600; }
 .preview-banner {
-  max-width: 780px; margin: 0 auto 22px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-sm);
+  max-width: var(--doc-w); margin: 0 auto 22px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-sm);
   background: rgb(96 165 250 / .1); border: 1px solid rgb(96 165 250 / .35); font-size: 14px;
 }
 
 /* barres flottantes */
 .floating { position: fixed; z-index: 70; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
-.bubble, .table-tools { display: flex; align-items: center; gap: 2px; padding: 4px; }
-.bubble button, .table-tools button {
+.bubble, .table-tools, .image-tools { display: flex; align-items: center; gap: 2px; padding: 4px; }
+.image-tools .bar-label { padding: 0 6px 0 8px; font-size: 12.5px; color: var(--muted); }
+.image-tools button.on { background: var(--accent-soft); color: var(--accent); }
+.image-tools .danger { color: var(--danger); }
+.image-tools .sep { width: 1px; align-self: stretch; margin: 4px 3px; background: var(--border); }
+.bubble button, .table-tools button, .image-tools button {
   height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--text); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap;
 }
 .bubble button:hover, .table-tools button:hover { background: var(--surface-2); }
@@ -423,9 +441,10 @@ label.field > span, .field-label { display: block; font-size: 13px; font-weight:
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1240px) {
-  .layout { grid-template-columns: var(--side-w) minmax(0, 1fr); }
+  .layout, body.has-toc .layout { grid-template-columns: var(--side-w) minmax(0, 1fr); }
   .toc { display: none; }
-  .search-btn { width: 220px; }
+  .search-btn { width: 190px; }
+  .search-btn kbd { display: none; }
 }
 @media (max-width: 1080px) {
   .top-nav .nav-link { padding: 7px 8px; }

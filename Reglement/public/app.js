@@ -1,4 +1,4 @@
-// RedSide V5 — interface du règlement : lecture façon documentation + mode édition par blocs
+// BLACKLIFE RP — interface du règlement : lecture façon documentation + mode édition par blocs
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ function model() {
 
 const ALLOWED = {
   P: [], BR: [], STRONG: [], B: [], EM: [], I: [], U: [], S: [], DEL: [], SPAN: ['class'], CODE: [],
-  H2: [], H3: [], UL: [], OL: [], LI: [], BLOCKQUOTE: [], HR: [], DIV: ['class'], A: ['href'], IMG: ['src', 'alt'],
+  H2: [], H3: [], UL: [], OL: [], LI: [], BLOCKQUOTE: [], HR: [], DIV: ['class'], A: ['href'], IMG: ['src', 'alt', 'class'],
   TABLE: [], THEAD: [], TBODY: [], TR: [], TH: [], TD: [],
 };
 const DROP = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'META', 'LINK', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT']);
@@ -159,6 +159,12 @@ function sanitize(html) {
         let keep = ALLOWED[tag].includes(name);
         if (keep && name === 'href') keep = /^(https?:|mailto:|#)/i.test(val);
         if (keep && name === 'src') keep = /^(\/uploads\/|https:)/i.test(val);
+        if (keep && name === 'class' && tag === 'IMG') {
+          // Taille d'image : on ne garde que img-sm / img-md (« selected » vient de l'éditeur).
+          const size = val.split(/\s+/).find(c => c === 'img-sm' || c === 'img-md');
+          if (size) child.setAttribute('class', size); else child.removeAttribute('class');
+          continue;
+        }
         if (keep && name === 'class') keep = tag === 'SPAN' ? val === 'hl' : /^callout callout-(info|warn|danger)$/.test(val);
         if (!keep) child.removeAttribute(attr.name);
       }
@@ -378,7 +384,7 @@ sidebar.addEventListener('click', async e => {
     if (d.addPage) return await createPage(d.addPage);
     if (d.addSub) { const raw = state.data.pages.find(p => p.id === d.addSub); return await createPage(raw.categoryId, raw.id); }
     if ('newCat' in d) {
-      const title = await promptBox('Nouvelle catégorie', 'Nom de la catégorie (ex. « Règlement de RedSide V5 »)', '', { submitLabel: 'Créer' });
+      const title = await promptBox('Nouvelle catégorie', 'Nom de la catégorie (ex. « Règlement de BlackLife »)', '', { submitLabel: 'Créer' });
       if (!title) return;
       await attempt(() => api('POST', '/api/categories', { title }), 'Catégorie créée.');
     }
@@ -653,6 +659,8 @@ function highlightInPage(root, q) {
 // --- Table des matières (« Sur cette page ») ---
 function setToc(heads) {
   state.heads = heads;
+  // Sans titres, la colonne de droite disparaît et le contenu prend la place.
+  document.body.classList.toggle('has-toc', heads.length > 0);
   toc.innerHTML = heads.length ? `<div class="toc-inner"><p class="toc-title">Sur cette page</p>
     <ul>${heads.map(h => `<li class="lvl-${h.level}"><a href="#" data-toc="${h.id}">${esc(h.text)}</a></li>`).join('')}</ul></div>` : '';
   spy();
@@ -852,8 +860,8 @@ function renderEditor(M, id) {
 
   main.innerHTML = `
     <div class="edit-bar">
+      <div class="edit-row">
       <span class="edit-status" id="ed-status"></span>
-      <span class="spacer"></span>
       <button type="button" class="btn btn-sm" id="ed-preview">${ICON.eye} Aperçu</button>
       <a class="btn btn-sm hide-sm" href="#/admin/historique?page=${id}">${ICON.clock} Historique</a>
       <button type="button" class="btn btn-sm" id="ed-save">Enregistrer</button>
@@ -864,6 +872,9 @@ function renderEditor(M, id) {
           ${can('publish') ? '<button type="button" data-ed="unpublish" id="ed-unpublish">Dépublier (cacher aux joueurs)</button>' : ''}
           <button type="button" data-ed="delete" class="danger">Supprimer la page</button>
         </div></div>
+      </div>
+      <div class="edit-tools" id="ed-tools">${TOOLBAR.map(t => t === '|' ? '<span class="sep"></span>'
+        : `<button type="button" data-tool="${t.label}" title="${t.desc}"${t.cls ? ` class="${t.cls}"` : ''}>${t.text}</button>`).join('')}</div>
     </div>
     ${can('publish') ? '' : '<p class="edit-note">Vous pouvez enregistrer, mais pas publier : une personne ayant l\'accès « Publier » rendra vos changements visibles.</p>'}
     <div id="ed-area">
@@ -948,6 +959,7 @@ function renderEditor(M, id) {
     previewing = !previewing;
     closeFloating();
     $('#ed-area').hidden = previewing;
+    $('#ed-tools').hidden = previewing;
     const pane = $('#ed-preview-pane');
     pane.hidden = !previewing;
     $('#ed-preview').innerHTML = previewing ? `${ICON.edit} Retour à l'édition` : `${ICON.eye} Aperçu`;
@@ -1144,15 +1156,75 @@ function renderEditor(M, id) {
     attempt(() => uploadImage(file), 'Image ajoutée.').then(({ url }) => ed.insertImage(url, null)).catch(() => {});
   });
 
-  // Clic sur une image : sélection (puis Suppr pour l'effacer).
+  // Clic sur une image : sélection + barre de taille (Suppr efface aussi l'image).
   body.addEventListener('click', e => {
     $$('img.selected', body).forEach(i => i.classList.remove('selected'));
+    $('.image-tools')?.remove();
     if (e.target.tagName === 'IMG') {
       e.target.classList.add('selected');
       const r = document.createRange(); r.selectNode(e.target);
       const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      showImageTools(e.target);
     }
   });
+
+  // Barre d'outils fixe : mêmes blocs que le menu « / », pour ceux qui préfèrent cliquer.
+  const tools = $('#ed-tools');
+  tools.addEventListener('mousedown', e => e.preventDefault()); // garde le curseur dans le texte
+  tools.addEventListener('click', e => {
+    const b = e.target.closest('[data-tool]');
+    if (!b) return;
+    const s = getSelection();
+    // Image sélectionnée : on insère après elle au lieu de la remplacer.
+    if (s.rangeCount && !s.isCollapsed && $('img.selected', body)) s.collapseToEnd();
+    if (!s.rangeCount || !body.contains(s.anchorNode)) {
+      // Curseur ailleurs : on insère à la fin de la page.
+      body.focus();
+      let last = body.lastElementChild;
+      if (!last || last.tagName !== 'P' || last.textContent.trim()) { last = document.createElement('p'); last.innerHTML = '<br>'; body.append(last); }
+      placeCaret(last);
+    }
+    const block = BLOCKS.find(x => x.label === b.dataset.tool);
+    Promise.resolve(block.run(ed)).finally(() => { markDirty(); updateFloating(); });
+  });
+}
+
+// Boutons de la barre d'outils fixe de l'éditeur (renvoient aux blocs du menu « / »).
+const TOOLBAR = [
+  { label: 'Titre', text: 'Titre', desc: 'Grand titre de section' },
+  { label: 'Sous-titre', text: 'Sous-titre', desc: 'Petit titre' },
+  { label: 'Texte', text: '¶', desc: 'Paragraphe normal' },
+  '|',
+  { label: 'Liste à puces', text: '• Liste', desc: 'Liste à puces' },
+  { label: 'Liste numérotée', text: '1. Liste', desc: 'Liste numérotée' },
+  '|',
+  { label: 'Image (envoyer)', text: '🖼️ Image', desc: 'Importer une image depuis votre ordinateur', cls: 'tool-main' },
+  { label: 'Image (lien)', text: '🔗 Image (lien)', desc: 'Image à partir d\'une adresse https://' },
+  '|',
+  { label: 'Encadré info', text: 'ℹ️ Info', desc: 'Encadré information' },
+  { label: 'Encadré attention', text: '⚠️ Attention', desc: 'Encadré attention' },
+  { label: 'Encadré interdit', text: '⛔ Interdit', desc: 'Encadré interdit' },
+  '|',
+  { label: 'Tableau', text: '📊 Tableau', desc: 'Insérer un tableau' },
+  { label: 'Séparateur', text: '―', desc: 'Ligne de séparation' },
+];
+
+// Taille d'une image dans la page : petite, moyenne ou pleine largeur.
+function showImageTools(img) {
+  const bar = floatingBar('image-tools', `
+    <span class="bar-label">Taille :</span>
+    <button type="button" data-a="sm">Petite</button><button type="button" data-a="md">Moyenne</button><button type="button" data-a="full">Pleine largeur</button>
+    <span class="sep"></span><button type="button" data-a="del" class="danger">Supprimer</button>`, a => {
+    const cur = $('#ed-body img.selected');
+    if (!cur) return;
+    if (a === 'del') { const p = cur.parentElement; cur.remove(); if (p.tagName === 'P' && !p.textContent.trim() && !p.querySelector('img')) p.remove(); $('.image-tools')?.remove(); return; }
+    cur.classList.remove('img-sm', 'img-md');
+    if (a !== 'full') cur.classList.add(`img-${a}`);
+    requestAnimationFrame(() => showImageTools(cur));
+  });
+  const size = img.classList.contains('img-sm') ? 'sm' : img.classList.contains('img-md') ? 'md' : 'full';
+  $$('[data-a]', bar).forEach(b => b.classList.toggle('on', b.dataset.a === size));
+  floatAt(bar, img.getBoundingClientRect());
 }
 
 // --- Tableaux : ajout / suppression de lignes et colonnes ---
@@ -1243,6 +1315,12 @@ function updateFloating() {
   if (!editor || !editor.body.isConnected) return;
   const s = getSelection();
   const inBody = s.rangeCount > 0 && editor.body.contains(s.anchorNode);
+
+  // La barre de taille suit l'image sélectionnée (défilement compris).
+  const img = $('img.selected', editor.body);
+  const imgBar = $('.image-tools');
+  if (imgBar && img) floatAt(imgBar, img.getBoundingClientRect());
+  else if (imgBar) imgBar.remove();
 
   // Bulle de mise en forme sur une sélection de texte.
   const hasText = inBody && !s.isCollapsed && s.toString().trim();
@@ -1348,7 +1426,7 @@ function renderSettings() {
             <button type="button" class="btn btn-sm btn-danger" id="logo-rm">Retirer</button>
             <p class="muted small">PNG transparent conseillé, 5 Mo max.</p></div>
         </div>
-        <label class="field"><span>Petit texte en bas du menu de gauche</span><input type="text" name="footerNote" maxlength="80" value="${esc(s.footerNote)}" placeholder="ex. Propulsé par RedSide"></label>
+        <label class="field"><span>Petit texte en bas du menu de gauche</span><input type="text" name="footerNote" maxlength="80" value="${esc(s.footerNote)}" placeholder="ex. Propulsé par BlackLife"></label>
       </div>
       <div class="card">
         <h2 class="card-title">Liens du menu du haut</h2>

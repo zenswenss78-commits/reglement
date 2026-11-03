@@ -1,4 +1,4 @@
-// RedSide V5 — serveur du règlement, style documentation (aucune dépendance externe, Node.js 18+)
+// BLACKLIFE RP — serveur du règlement, style documentation (aucune dépendance externe, Node.js 18+)
 'use strict';
 
 const http = require('http');
@@ -114,9 +114,9 @@ function saveDb() {
 // history    : journal des modifications (le plus récent en premier)
 
 const DEFAULT_SETTINGS = {
-  siteName: 'RedSide V5',
+  siteName: 'BLACKLIFE RP',
   logo: null,
-  footerNote: 'Propulsé par RedSide',
+  footerNote: 'Propulsé par BlackLife',
   nav: [
     { label: 'Accueil', url: '#/', children: [{ label: 'Règlement', url: '#/' }, { label: 'Guide', url: '#/' }] },
     { label: 'Se connecter', url: '#/connexion', children: [] },
@@ -135,14 +135,14 @@ function seed() {
   const cat = (title, order) => { const c = { id: uid(), title, order }; d.categories.push(c); return c; };
   const page = (categoryId, parentId, order, icon, title, description, content) => {
     const v = { title, icon, description, content };
-    const p = { id: uid(), categoryId, parentId, order, draft: v, live: structuredClone(v), updatedAt: now, updatedBy: 'RedSide', publishedAt: now };
+    const p = { id: uid(), categoryId, parentId, order, draft: v, live: structuredClone(v), updatedAt: now, updatedBy: 'BlackLife', publishedAt: now };
     d.pages.push(p);
     return p;
   };
 
-  const rules = cat('Règlement de RedSide V5', 0);
-  page(rules.id, null, 0, '👋', 'Bienvenue', 'Tout ce qu\'il faut savoir avant de jouer sur RedSide V5.',
-    `<p>Bienvenue sur <strong>RedSide V5</strong> ! Ce règlement s'applique <span class="hl">à tous les joueurs</span>, en jeu comme sur le Discord.</p>
+  const rules = cat('Règlement de BlackLife', 0);
+  page(rules.id, null, 0, '👋', 'Bienvenue', 'Tout ce qu\'il faut savoir avant de jouer sur BLACKLIFE RP.',
+    `<p>Bienvenue sur <strong>BLACKLIFE RP</strong> ! Ce règlement s'applique <span class="hl">à tous les joueurs</span>, en jeu comme sur le Discord.</p>
 <div class="callout callout-warn"><p>En rejoignant le serveur, vous acceptez ce règlement. Nul n'est censé l'ignorer.</p></div>
 <h2>Comment lire ce règlement</h2>
 <ol><li>Choisissez une page dans le menu de gauche.</li><li>Utilisez la colonne <strong>« Sur cette page »</strong> à droite pour aller à une section.</li><li>Appuyez sur <strong>Ctrl + K</strong> pour rechercher une règle.</li></ol>
@@ -150,7 +150,7 @@ function seed() {
 <div class="callout callout-info"><p>Information : un conseil ou une précision.</p></div>
 <div class="callout callout-warn"><p>Attention : un point important à ne pas rater.</p></div>
 <div class="callout callout-danger"><p>Interdit : ce qui est strictement interdit et sanctionné.</p></div>`);
-  const general = page(rules.id, null, 1, '📜', 'Règles générales', 'Les principes fondamentaux à respecter sur RedSide V5.',
+  const general = page(rules.id, null, 1, '📜', 'Règles générales', 'Les principes fondamentaux à respecter sur BLACKLIFE RP.',
     `<h2>Respect</h2>
 <p>Le respect envers tous les joueurs et membres du staff est <strong>obligatoire</strong>, en jeu comme sur le Discord.</p>
 <h2>Langage</h2>
@@ -169,11 +169,11 @@ function seed() {
 <p>Un braquage nécessite un minimum de policiers en service. Les otages doivent être traités de manière RP.</p>
 <div class="callout callout-info"><p>Le nombre de policiers requis est affiché en jeu.</p></div>`);
 
-  const guide = cat('Guide RedSide', 1);
+  const guide = cat('Guide BlackLife', 1);
   page(guide.id, null, 0, '🚀', 'Bien débuter', 'Les premiers pas sur le serveur.',
     `<h2>Rejoindre le serveur</h2>
-<ol><li>Rejoignez le Discord.</li><li>Lisez entièrement ce règlement.</li><li>Lancez FiveM et connectez-vous à RedSide V5.</li></ol>
-<hr><p>Bon jeu sur <strong>RedSide V5</strong> !</p>`);
+<ol><li>Rejoignez le Discord.</li><li>Lisez entièrement ce règlement.</li><li>Lancez FiveM et connectez-vous à BLACKLIFE RP.</li></ol>
+<hr><p>Bon jeu sur <strong>BLACKLIFE RP</strong> !</p>`);
 
   // Reprend les accès et le logo de l'ancien site s'il existait.
   if (fs.existsSync(LEGACY_DB_FILE)) {
@@ -190,7 +190,22 @@ function seed() {
 function normalizeDb(d) {
   d.settings = { ...structuredClone(DEFAULT_SETTINGS), ...d.settings };
   for (const k of ['access', 'requests', 'categories', 'pages', 'history']) if (!Array.isArray(d[k])) d[k] = [];
+  if (!d.brandFixed) renameOldBrand(d);
   return d;
+}
+
+// Une seule fois : remplace l'ancien nom « RedSide » des pages d'exemple par BlackLife.
+function renameOldBrand(d) {
+  const fix = s => (typeof s === 'string' ? s.replace(/RedSide V5/g, 'BLACKLIFE RP').replace(/RedSide/gi, 'BlackLife') : s);
+  if (/redside/i.test(d.settings.siteName)) d.settings.siteName = 'BLACKLIFE RP';
+  d.settings.footerNote = fix(d.settings.footerNote);
+  for (const n of d.settings.nav || []) { n.label = fix(n.label); for (const c of n.children || []) c.label = fix(c.label); }
+  for (const c of d.categories) c.title = fix(c.title);
+  for (const p of d.pages) {
+    for (const v of [p.draft, p.live]) if (v) for (const k of ['title', 'description', 'content']) v[k] = fix(v[k]);
+    p.updatedBy = fix(p.updatedBy);
+  }
+  d.brandFixed = true;
 }
 
 let db = null; // chargé au démarrage (voir tout en bas)
@@ -669,5 +684,5 @@ const server = http.createServer(async (req, res) => {
     process.exit(1);
   }
   console.log(`Stockage : ${useSupabase ? 'Supabase' : DB_FILE}`);
-  server.listen(PORT, () => console.log(`RedSide V5 — règlement disponible sur http://localhost:${PORT}`));
+  server.listen(PORT, () => console.log(`BLACKLIFE RP — règlement disponible sur http://localhost:${PORT}`));
 })();

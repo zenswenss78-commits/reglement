@@ -1,8 +1,8 @@
 {
-  "name": "redside-reglement",
+  "name": "blacklife-reglement",
   "version": "1.0.0",
   "private": true,
-  "description": "Site du règlement RedSide V5",
+  "description": "Site du règlement BLACKLIFE RP",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
